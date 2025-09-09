@@ -1,7 +1,7 @@
-# DA401 Capstone Project - [Your Name]
+# DA401 Capstone Project - [Calvin Burzynski]
 
 ## Project Title
-(Write a clear, descriptive title for your project.)
+Beyond Employment: Evaluating the Poverty-Reducing Effects of Minimum Wage Increases in the United States
 
 ## Research Question
 What question are you trying to answer?
