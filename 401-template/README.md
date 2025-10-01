@@ -4,16 +4,19 @@
 Beyond Employment: Evaluating the Poverty-Reducing Effects of Minimum Wage Increases in the United States
 
 ## Research Question
-What question are you trying to answer?
+Do state minimum wage increases (2018–2023) reduce poverty among full-time low-wage workers in the U.S.?
 
 ## Data Source
-Where is your data coming from? 
-
+-ACS/IPUMS
+-DOL
+-BLS
+-BEA
+-FRED
 ## Methods
-Which methods or models will you use? 
+Parallel trends testing, clustering (inference), difference-in-differences, sensitivity checks
 
 ## Expected Timeline
-What do you expect to produce every week?
+I expect to produce something new or revelant to the project each week. This could be in the form of a paper that outlines my methodology, literature, and research design, to cleaning the data and identifying key discrepencies in the literature that I should be aware of during my analysis. There is a lot of data that I am working with, so being able to work with the data in Rstudio/Jupyter Notebook each week will be a priority.
 
 ## Google Drive 
 [Google Drive link if you have any]
