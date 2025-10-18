@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 print("Hello git")
 x <- 1:10
+plot(x)
 ```
 
 
