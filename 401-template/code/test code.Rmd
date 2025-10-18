@@ -1,0 +1,16 @@
+---
+title: "DA 401 Early Results"
+author: "Calvin Burzynski"
+date: "2025-10-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+print("Hello git")
+```
+
+
