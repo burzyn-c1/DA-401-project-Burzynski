@@ -15,6 +15,7 @@ library(tidyr)
 library(stringr)
 library(lubridate)
 library(readr)
+library(ggplot2)
 
 #load in ipums (acs) dataset
 ipums <- read.csv("../../../usa_00003.csv.gz")
@@ -133,3 +134,21 @@ initial_panel <- ipums_poverty %>%
   left_join(gdp_income_with_fips, by = c("STATEFIP", "YEAR"))
 ```
 
+```{r}
+plot_data <- initial_panel %>%
+  group_by(State.x) %>%
+  mutate(Group = ifelse(any(min_wage > 7.25), "Treated States", "Control States")) %>%
+  ungroup()
+
+ggplot(plot_data, aes(x = YEAR, y = poverty_rate, color = Group)) + 
+  stat_summary(fun = "mean", geom = "line", size = 1.2) + 
+  stat_summary(fun = "mean", geom = "point", size = 3) + 
+  labs(title = "Poverty Rate Trends for Low-Wage Workers (2018-2023)", 
+       subtitle = "Visual check for the parallel trends assumption", 
+       x = "Year", 
+       y = "Average Poverty Rate", 
+       color = "State Group") + 
+  theme_minimal()
+```
+
+The yielded plot from the code is a visualization check for the parallel trends assumption. For Difference-in-Differences to be valid, it must be assumed that the "Treated" and "Control" states would have followed similar trends if no minimum wage increases had occurred. The plot essentially shows this. A large spike in poverty for both groups in 2020 is a clear and expected result, potentially reflecting the economic disruption of the covid-19 pandemic. After 2020/21, there appeared to be a decline in poverty for both groups. The hope is that the analysis going forward will answer the following question: "did the poverty rate in the treated states fall more than it did in the control states, after accounting for the baseline differences and 2020 shock?"
