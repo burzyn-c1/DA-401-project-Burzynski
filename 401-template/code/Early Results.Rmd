@@ -1,0 +1,135 @@
+---
+title: "DA 401 Early Results"
+author: "Calvin Burzynski"
+date: "2025-10-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(readr)
+
+#load in ipums (acs) dataset
+ipums <- read.csv("../../../usa_00003.csv.gz")
+
+#load minimum wage DOL data
+min_wage_data <- read.csv("..//..//..//Minimum Wage from DOL 2018-2024.csv")
+
+#load monthly unemployment rate data
+unemployment_rate_data <- read.csv("..//..//..//State unemployment rates over the last 10 years, seasonally adjusted_BLS.csv")
+
+gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.csv", skip = 3)
+```
+
+```{r}
+#filter for poverty status
+ipums_poverty <- ipums %>% 
+  filter(EMPSTAT == 1, UHRSWORK >= 35) %>% 
+  mutate(in_poverty = ifelse(INCWAGE <= 18000, 1, 0)) %>% # $18,000 threshold to account for recent changes in inflation
+  group_by(STATEFIP, YEAR) %>% #group by state and year
+  summarize(poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = TRUE), .groups = "drop")
+```
+
+
+```{r}
+#cleans columns with 'X' prefix
+min_wage_cleaned <- min_wage_data %>%
+  rename_with(~str_remove(., "^X"), starts_with("X"))
+
+min_wage_long <- min_wage_cleaned %>%
+  pivot_longer(
+    cols = '2018':'2023', #attempted to select columns but still included 2024 column
+    names_to = "YEAR",
+    values_to = "min_wage"
+  ) %>%
+  mutate(YEAR = as.numeric(YEAR))
+
+#drop 2024 column as it wasn't omitted when trying to pivot
+min_wage_long <- min_wage_long %>%
+  select(-("2024"))
+```
+
+```{r}
+#pivot unemplyoment rate data to long format
+str(unemployment_rate_data)
+
+#replaces "." with "-" for month and year columns
+unemployment_rate_rename <- unemployment_rate_data %>%
+  rename_with(~ str_replace_all(.x, "\\.", "-"), .cols = -State)
+
+#helps match structure of month-year columns 
+month_cols <- grep("^[A-Za-z]{3}-\\d{2,4}$", names(unemployment_rate_rename), value = TRUE)
+
+unemployment_numeric <- unemployment_rate_rename %>%
+  mutate(across(all_of(month_cols), ~ parse_number(as.character(.))))
+
+unemployment_long <- unemployment_numeric %>%
+  pivot_longer(
+    cols = all_of(month_cols), 
+    names_to = "date_string", 
+    values_to = "unemployment_rate"
+  ) %>%
+  mutate(
+    date = my(date_string), 
+    YEAR = year(date)
+  ) %>%
+  filter(!is.na(date), between(YEAR, 2018, 2023)) %>%
+  group_by(State, YEAR) %>%
+  summarise(unemployment_rate = mean(unemployment_rate, na.rm = TRUE), .groups = 'drop')
+```
+
+```{r}
+gdp_income_long <- gdp_income %>%
+  rename_with(~str_remove(., "^X"), starts_with("X")) %>%
+  filter(LineCode %in% c(1, 4)) %>%
+  select(GeoName, GeoFips, Description, '2018':'2023') %>%
+  pivot_longer(
+    cols = '2018':'2023',
+    names_to = "YEAR",
+    values_to = "value"
+  ) %>%
+  mutate(Year = as.numeric(YEAR)) %>%
+  pivot_wider(names_from = Description, values_from = value)
+```
+
+
+```{r}
+#lookup table to help identify by both column names
+state_lookup <- min_wage_long %>%
+  select(State, STATEFIP = StateFIPS) %>%
+  mutate(STATEFIP = as.numeric(STATEFIP)) %>%
+  distinct()
+
+#join fips code to the unemployment data
+unemployment_with_fips <- unemployment_long %>%
+  left_join(state_lookup, by = "State")
+
+gdp_income_with_fips <- gdp_income_long %>%
+  left_join(state_lookup, by = c("GeoName" = "State"))
+
+
+
+#needed to make sure data types align
+min_wage_long <- min_wage_long %>%
+  mutate(YEAR = as.numeric(YEAR))
+
+gdp_income_with_fips <- gdp_income_with_fips %>% mutate(YEAR = as.numeric(YEAR))
+
+unemployment_with_fips <- unemployment_with_fips %>% mutate(YEAR = as.numeric(YEAR))
+
+ipums_poverty <- ipums_poverty %>% mutate(YEAR = as.numeric(YEAR))
+
+#initial panel data
+initial_panel <- ipums_poverty %>%
+  left_join(min_wage_long, by = c("STATEFIP" = "StateFIPS", "YEAR")) %>% #add minimum wage data
+  left_join(unemployment_with_fips, by = c("STATEFIP", "YEAR")) %>% #add unemployment data
+  left_join(gdp_income_with_fips, by = c("STATEFIP", "YEAR"))
+```
+
