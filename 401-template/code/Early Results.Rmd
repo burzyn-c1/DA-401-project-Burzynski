@@ -16,6 +16,8 @@ library(stringr)
 library(lubridate)
 library(readr)
 library(ggplot2)
+library(fixest)
+library(janitor)
 
 #load in ipums (acs) dataset
 ipums <- read.csv("../../../usa_00003.csv.gz")
@@ -31,35 +33,45 @@ gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.c
 
 ```{r}
 #filter for poverty status
-ipums_poverty <- ipums %>% 
-  filter(EMPSTAT == 1, UHRSWORK >= 35) %>% 
-  mutate(in_poverty = ifelse(INCWAGE <= 18000, 1, 0)) %>% # $18,000 threshold to account for recent changes in inflation
-  group_by(STATEFIP, YEAR) %>% #group by state and year
-  summarize(poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = TRUE), .groups = "drop")
+ipums %>%
+  distinct(POVERTY) %>%
+  arrange(POVERTY) #investigating values of poverty 
+
+ipums_poverty <- ipums %>%
+  filter(EMPSTAT == 1, UHRSWORK >= 35, WKSWORK2 >= 6, AGE >= 18, AGE <= 64) %>%
+  mutate(
+    in_poverty = ifelse(OFFPOV == 1, 1, 0), 
+    valid = ifelse(OFFPOV %in% c(0, 1), 1, 0)
+  ) %>%
+  filter(valid == 1) %>%
+  group_by(STATEFIP, YEAR) %>%
+  summarise(
+    poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = TRUE),
+    pop_weight = sum(PERWT, na.rm = TRUE), 
+    .groups = 'drop'
+  )
+#pop_weight represents the estimated total number of individuals represented by the ACS sample in that state-year 
+
+
 ```
 
 
 ```{r}
-#cleans columns with 'X' prefix
-min_wage_cleaned <- min_wage_data %>%
-  rename_with(~str_remove(., "^X"), starts_with("X"))
-
-min_wage_long <- min_wage_cleaned %>%
+min_wage_long <- min_wage_data %>%
+  rename_with(~str_remove(., "^X"), starts_with("X")) %>% #cleans columns with 'X' prefix
   pivot_longer(
-    cols = '2018':'2023', #attempted to select columns but still included 2024 column
+    cols = all_of(as.character(2018:2024)),
     names_to = "YEAR",
     values_to = "min_wage"
   ) %>%
-  mutate(YEAR = as.numeric(YEAR))
-
-#drop 2024 column as it wasn't omitted when trying to pivot
-min_wage_long <- min_wage_long %>%
-  select(-("2024"))
+  mutate(
+    YEAR = as.numeric(YEAR)
+  ) %>%
+  filter(between(YEAR, 2018, 2023))
 ```
 
 ```{r}
 #pivot unemplyoment rate data to long format
-str(unemployment_rate_data)
 
 #replaces "." with "-" for month and year columns
 unemployment_rate_rename <- unemployment_rate_data %>%
@@ -89,50 +101,69 @@ unemployment_long <- unemployment_numeric %>%
 ```{r}
 gdp_income_long <- gdp_income %>%
   rename_with(~str_remove(., "^X"), starts_with("X")) %>%
-  filter(LineCode %in% c(1, 4)) %>%
-  select(GeoName, GeoFips, Description, '2018':'2023') %>%
+  filter(LineCode %in% c(1, 8)) %>%
+  select(GeoName, GeoFips, LineCode, all_of(as.character(2018:2023))) %>%
   pivot_longer(
-    cols = '2018':'2023',
+    cols = all_of(as.character(2018:2023)),
     names_to = "YEAR",
     values_to = "value"
   ) %>%
-  mutate(Year = as.numeric(YEAR)) %>%
-  pivot_wider(names_from = Description, values_from = value)
+  mutate(
+    YEAR = as.integer(YEAR), 
+    value = parse_number(as.character(value)),
+    STATEFIP = as.integer(parse_number(as.character(GeoFips)) / 1000L), 
+    var = case_when(
+      LineCode == 1 ~ "real_gdp", 
+      LineCode == 8 ~ "real_per_capita_income"
+    )
+  ) %>%
+  filter(STATEFIP >0) %>%
+  select(STATEFIP, YEAR, var, value, GeoName) %>%
+  pivot_wider(names_from = var, values_from = value) %>%
+  mutate(real_gdp = as.numeric(real_gdp), 
+         real_per_capita_income = as.numeric(real_per_capita_income)
+         )
 ```
+
+
 
 
 ```{r}
-#lookup table to help identify by both column names
-state_lookup <- min_wage_long %>%
-  select(State, STATEFIP = StateFIPS) %>%
-  mutate(STATEFIP = as.numeric(STATEFIP)) %>%
-  distinct()
-
-#join fips code to the unemployment data
 unemployment_with_fips <- unemployment_long %>%
-  left_join(state_lookup, by = "State")
-
-gdp_income_with_fips <- gdp_income_long %>%
-  left_join(state_lookup, by = c("GeoName" = "State"))
-
-
-
-#needed to make sure data types align
-min_wage_long <- min_wage_long %>%
-  mutate(YEAR = as.numeric(YEAR))
-
-gdp_income_with_fips <- gdp_income_with_fips %>% mutate(YEAR = as.numeric(YEAR))
-
-unemployment_with_fips <- unemployment_with_fips %>% mutate(YEAR = as.numeric(YEAR))
-
-ipums_poverty <- ipums_poverty %>% mutate(YEAR = as.numeric(YEAR))
-
-#initial panel data
-initial_panel <- ipums_poverty %>%
-  left_join(min_wage_long, by = c("STATEFIP" = "StateFIPS", "YEAR")) %>% #add minimum wage data
-  left_join(unemployment_with_fips, by = c("STATEFIP", "YEAR")) %>% #add unemployment data
-  left_join(gdp_income_with_fips, by = c("STATEFIP", "YEAR"))
+  left_join(
+    min_wage_long %>%
+      distinct(State, StateFIPS) %>%
+      transmute(State, STATEFIP = as.integer(StateFIPS)), 
+    by = "State"
+  ) %>%
+  transmute(STATEFIP, YEAR, unemployment_rate)
 ```
+
+```{r}
+#assign states names
+state_names <- no_doc %>%
+  distinct(STATEFIP, GeoName)
+
+
+  
+#merging datasets
+panel_data <- ipums_poverty %>%
+  left_join(min_wage_long %>% transmute(STATEFIP = as.integer(StateFIPS), YEAR, min_wage), 
+            by = c("STATEFIP", "YEAR")) %>%
+  left_join(unemployment_with_fips, by = c("STATEFIP", "YEAR")) %>%
+  left_join(state_names, by = c("STATEFIP"))
+
+
+#filter out district of columbia
+panel_clean <- panel_data %>%
+  filter(STATEFIP != 11)
+
+#summary of data
+summary(panel_data)
+
+```
+
+
 
 ```{r}
 plot_data <- initial_panel %>%
@@ -152,3 +183,52 @@ ggplot(plot_data, aes(x = YEAR, y = poverty_rate, color = Group)) +
 ```
 
 The yielded plot from the code is a visualization check for the parallel trends assumption. For Difference-in-Differences to be valid, it must be assumed that the "Treated" and "Control" states would have followed similar trends if no minimum wage increases had occurred. The plot essentially shows this. A large spike in poverty for both groups in 2020 is a clear and expected result, potentially reflecting the economic disruption of the covid-19 pandemic. After 2020/21, there appeared to be a decline in poverty for both groups. The hope is that the analysis going forward will answer the following question: "did the poverty rate in the treated states fall more than it did in the control states, after accounting for the baseline differences and 2020 shock?"
+
+```{r}
+ggplot(initial_panel, aes(x = poverty_rate)) + geom_histogram(bins = 30, fill = "blue", color = "black") + labs(title = "Distribution of State-Year Poverty Rates")
+
+ggplot(initial_panel, aes(x = unemployment_rate, y = poverty_rate)) + geom_point()
+```
+
+
+
+
+```{r}
+#binary variable to determine if state was treated
+panel_data_clean <- initial_panel %>%
+  mutate(is_treated = ifelse(min_wage > 7.25, 1, 0))
+
+#clean names to make regression smoother
+#drop district of columbia; statefips = 11
+
+panel_data_clean2 <- panel_data_clean %>%
+  clean_names() %>%
+  filter(statefip != 11) %>%
+  select(statefip, year, poverty_rate, state_x, min_wage, unemployment_rate, real_gdp, real_per_capita_income) %>%
+  rename(state = state_x) %>%
+  mutate(
+    across(c(poverty_rate, min_wage, unemployment_rate, real_gdp, real_per_capita_income), 
+           ~ parse_number(as.character(.)))
+  )
+panel_data_clean2 <- panel_data_clean2 %>%
+  mutate(real_gdp_mil = real_gdp / 1e6)
+
+preliminary_model <- feols(
+  poverty_rate ~ min_wage + unemployment_rate + real_gdp_mil + real_per_capita_income | statefip + year, data = panel_data_clean2
+)
+
+summary(preliminary_model)
+
+
+m_twfe <- feols(poverty_rate ~ min_wage + unemployment_rate + real_per_capita_income | statefip + year,
+                data = panel_data_clean2,
+                vcov = ~ statefip 
+  
+)
+summary(m_twfe)
+```
+
+```{r}
+colnames(panel_data_clean)
+```
+
