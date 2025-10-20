@@ -18,6 +18,7 @@ library(readr)
 library(ggplot2)
 library(fixest)
 library(janitor)
+library(broom)
 
 #load in ipums (acs) dataset
 ipums <- read.csv("../../../usa_00003.csv.gz")
@@ -54,7 +55,6 @@ ipums_poverty <- ipums %>%
 
 
 ```
-
 
 ```{r}
 min_wage_long <- min_wage_data %>%
@@ -125,9 +125,6 @@ gdp_income_long <- gdp_income %>%
          )
 ```
 
-
-
-
 ```{r}
 unemployment_with_fips <- unemployment_long %>%
   left_join(
@@ -140,18 +137,12 @@ unemployment_with_fips <- unemployment_long %>%
 ```
 
 ```{r}
-#assign states names
-state_names <- no_doc %>%
-  distinct(STATEFIP, GeoName)
-
-
-  
 #merging datasets
 panel_data <- ipums_poverty %>%
   left_join(min_wage_long %>% transmute(STATEFIP = as.integer(StateFIPS), YEAR, min_wage), 
             by = c("STATEFIP", "YEAR")) %>%
   left_join(unemployment_with_fips, by = c("STATEFIP", "YEAR")) %>%
-  left_join(state_names, by = c("STATEFIP"))
+  left_join(gdp_income_long, by = c("STATEFIP", "YEAR"))
 
 
 #filter out district of columbia
@@ -159,76 +150,120 @@ panel_clean <- panel_data %>%
   filter(STATEFIP != 11)
 
 #summary of data
-summary(panel_data)
-
+summary(panel_clean)
+names(panel_clean)
 ```
 
+```{r}
+#check data distributions
 
+#gdp 
+ggplot(panel_clean, aes(x = real_gdp)) + geom_histogram(bins = 30, fill = "darkgreen", color = "black") + labs(title = "Distribution of GDP")
+
+#income
+ggplot(panel_clean, aes(x = real_per_capita_income)) + geom_histogram(bins = 30, fill = "darkblue", color = "white") + labs(title = "Distribution of Real Per Capita Income")
+
+#minimum wage 
+ggplot(panel_clean, aes(x = min_wage)) + geom_histogram(bins = 30, fill = "darkred", color = "white") + labs(title = "Distribution of Minimum Wage Across States")
+
+
+#due to skewness of variables and common practice in research, some log transformations will be applied
+
+#also creating dummy variable and log of one that looks okay distribution wise, but can be used down the line for robustness check
+panel_clean2 <- panel_clean %>%
+  mutate(log_gdp = log(pmax(real_gdp, 1)), 
+         log_income = log(pmax(real_per_capita_income, 1)), 
+         log_minw = log(pmax(min_wage, 1)), 
+         treated_minw = as.integer(min_wage > 7.25))
+  
+```
 
 ```{r}
-plot_data <- initial_panel %>%
-  group_by(State.x) %>%
-  mutate(Group = ifelse(any(min_wage > 7.25), "Treated States", "Control States")) %>%
+plot_data <- panel_clean2 %>%
+  group_by(STATEFIP) %>%
+  mutate(Group = ifelse(any(min_wage > 7.25), "Treated", "Control")) %>%
   ungroup()
 
-ggplot(plot_data, aes(x = YEAR, y = poverty_rate, color = Group)) + 
+
+ggplot(plot_data, aes(x = as.numeric(as.character(YEAR)), y = poverty_rate, color = Group)) + 
   stat_summary(fun = "mean", geom = "line", size = 1.2) + 
-  stat_summary(fun = "mean", geom = "point", size = 3) + 
-  labs(title = "Poverty Rate Trends for Low-Wage Workers (2018-2023)", 
-       subtitle = "Visual check for the parallel trends assumption", 
-       x = "Year", 
-       y = "Average Poverty Rate", 
-       color = "State Group") + 
+  stat_summary(fun = "mean", geom = "point", size = 2.5) + 
+  labs(title = "Parallel Trends Check: Treated vs. Control States",
+       subtitle = "Average poverty rates before and after minimum wage increases",
+       x = "Year", y = "Mean Povery Rate", color = "Group") + 
   theme_minimal()
 ```
 
-The yielded plot from the code is a visualization check for the parallel trends assumption. For Difference-in-Differences to be valid, it must be assumed that the "Treated" and "Control" states would have followed similar trends if no minimum wage increases had occurred. The plot essentially shows this. A large spike in poverty for both groups in 2020 is a clear and expected result, potentially reflecting the economic disruption of the covid-19 pandemic. After 2020/21, there appeared to be a decline in poverty for both groups. The hope is that the analysis going forward will answer the following question: "did the poverty rate in the treated states fall more than it did in the control states, after accounting for the baseline differences and 2020 shock?"
+The parallel trends visualization above compares the average poverty rates between treated states (those with minimum wages above \$7.25) and control states (those maintaining the federal minimum) from 2018 to 2023. Prior to policy changes, both groups appear to exhibit stable but distinct trajectories. This results in the treated states showing consistently lower poverty levels, while control states experience slightly higher rates. Although the two groups are not perfectly parallel in the pre-treatment period, their trends move in broadly similar directions, especially before 2020, suggesting that parallel trends assumption is reasonably plausible. The post-2020 divergence, particularly the sharper increase among control states, is consistent with the hypothesis that minimum wage increases may have mitigated poverty growth in treated states following the economic disruptions of Covid-19. Moving from 2022 to 2023, we can see the treatment and control group start to follow similar trends.
 
 ```{r}
-ggplot(initial_panel, aes(x = poverty_rate)) + geom_histogram(bins = 30, fill = "blue", color = "black") + labs(title = "Distribution of State-Year Poverty Rates")
+ggplot(panel_clean2, aes(x = poverty_rate)) + geom_histogram(bins = 30, fill = "blue", color = "black") + labs(title = "Distribution of State-Year Poverty Rates")
 
-ggplot(initial_panel, aes(x = unemployment_rate, y = poverty_rate)) + geom_point()
+
 ```
 
+```{r}
+#poverty vs minimum wage
+ggplot(panel_clean2, aes(x = log_minw, y = poverty_rate)) + 
+  geom_point(alpha = 0.6, color = "blue") + 
+  geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) + 
+  labs(title = "Poverty vs. Minimum Wage", 
+       x = "Log(Minimum Wage)", 
+       y = "Poverty Rate")
+```
 
+The scatterplot shows a negative relationship between poverty rates and real per capita income across states and years. As income levels rise, poverty rates consistently decline, which aligns with economic theory that higher income improves household well-being and reduces the share of individuals living below the poverty threshold. The fitted regression line highlights a moderately strong downward slope, suggesting that even small proportional increases in per capita income are associated with measurable reductions in state-level poverty. This relationship provides early support for including real per capita income as a key control variable in assessing the effects of minimum wage policy on poverty.
 
 
 ```{r}
-#binary variable to determine if state was treated
-panel_data_clean <- initial_panel %>%
-  mutate(is_treated = ifelse(min_wage > 7.25, 1, 0))
+#poverty vs. income
+ggplot(panel_clean2, aes(x = log_income, y = poverty_rate)) +
+  geom_point(alpha = 0.6, color = "black") + geom_smooth(method = "lm", se = FALSE, color = "orange", size = 1) + 
+  labs(title = "Poverty vs Real Per Capita Income", x = "Log(Income)", y = "Poverty Rate")
+```
 
-#clean names to make regression smoother
-#drop district of columbia; statefips = 11
+The relationship visualized between poverty rates and the log of minimum wage was also negative. though somewhat weaker and more dispersed than that observed for income. States with higher minimum wages generally exhibit lower poverty rates, but the wider scatter reflects that wage policy alone does not fully explain poverty variation across states. Still, the downward-sloping trend line indicates that increases in the minimum wage are correlated with lower poverty, supporting the hypothesis that higher wage floors can improve living standards for low-income workers. The visualization provides early evidence of the expected direction of the policy's impact. which will be tested more formally in the fixed-effects regressions. 
 
-panel_data_clean2 <- panel_data_clean %>%
-  clean_names() %>%
-  filter(statefip != 11) %>%
-  select(statefip, year, poverty_rate, state_x, min_wage, unemployment_rate, real_gdp, real_per_capita_income) %>%
-  rename(state = state_x) %>%
-  mutate(
-    across(c(poverty_rate, min_wage, unemployment_rate, real_gdp, real_per_capita_income), 
-           ~ parse_number(as.character(.)))
+```{r}
+panel_clean2 %>%
+  group_by(treated_minw) %>%
+  summarise(
+    mean_poverty = mean(poverty_rate, na.rm = T),
+    mean_minw = mean(min_wage, na.rm = T),
+    mean_income = mean(real_per_capita_income, na.rm = T),
+    mean_unemp = mean(unemployment_rate, na.rm = T)
   )
-panel_data_clean2 <- panel_data_clean2 %>%
-  mutate(real_gdp_mil = real_gdp / 1e6)
-
-preliminary_model <- feols(
-  poverty_rate ~ min_wage + unemployment_rate + real_gdp_mil + real_per_capita_income | statefip + year, data = panel_data_clean2
-)
-
-summary(preliminary_model)
-
-
-m_twfe <- feols(poverty_rate ~ min_wage + unemployment_rate + real_per_capita_income | statefip + year,
-                data = panel_data_clean2,
-                vcov = ~ statefip 
-  
-)
-summary(m_twfe)
 ```
 
+
 ```{r}
-colnames(panel_data_clean)
+str(panel_clean2)
+names(panel_clean2)
+
+#function "feols" is having issues with finding STATEFIP even though it is in the dataset
+vars_needed <- c("STATEFIP", "YEAR", "poverty_rate", "log_minw", "log_income", "log_gdp",
+                 "unemployment_rate", "pop_weight")
+setdiff(vars_needed, names(panel_clean2)) #returned character(0) so no actual issues with names
+
+#convert to factors
+panel_clean2$YEAR <- as.factor(as.numeric(panel_clean2$YEAR))
+panel_clean2$STATEFIP <- as.factor(as.numeric(panel_clean2$YEAR))
+
+fe_model <- feols(
+  poverty_rate ~ log_minw + log_income + log_gdp + unemployment_rate | STATEFIP + YEAR,
+  data = panel_clean2,
+  cluster = ~ STATEFIP,
+  weights = ~ pop_weight,
+)
+summary(fe_plot)
+
+#polished results of fixed effects regression
+etable(fe_model, digits = 3, title = "Fixed Effects Model: Poverty vs. Minimum Wage")
+```
+
+The two-way fixed effects model, which controls for both state-specific (STATEFIP) and year effects (YEAR), estimates the within-state relationship between poverty rates and economic factors over time while accounting for unobserved state heterogeneity across states and national shocks that affect all states equally. After clustering standard errors at the state level and weighting by population, the model suggests that increases in minimum wage (log_minw) are associated with small, statistically insignificant reductions in poverty. The coefficient on real GDP (log_gdp) is negative and statistically significant at the 5% significance level, indicating that higher state-level economic output is linked to lower poverty rates, holding all else constant. Meanwhile, real per-capita income (log_income) and unemployment rate display the expected directions. Higher income correlates with lower poverty, whereas higher employment slightly raises poverty. It is important to note these are statistically insignificant. The R-squared value of 0.94 reflects a strong overall fit, likely driven by the inclusion of state and year fixed effects that absorb much of the variation across time and geography. The within R-sqaured of 0.043 indicates that only a modest share of within-state variation in poverty is explained by the included covariates, consistent with the notion that structural poverty dynamics evolve slowly. Overall, these results align with economic theory: while HDP growth and income levels have measureable impacts on poverty reduction, the short-run effects of minimum wage changes appear limited once broader economic conditions and fixed effects are controlled for. 
+
+```{r}
+
 ```
 
