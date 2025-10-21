@@ -32,6 +32,24 @@ unemployment_rate_data <- read.csv("..//..//..//State unemployment rates over th
 gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.csv", skip = 3)
 ```
 
+
+```{r}
+#reusable visual theme for graphs 
+theme_slide <- theme_minimal(base_size = 13) + 
+  theme(
+    plot.title.position = "plot",
+    plot.title = element_text(face = "bold"), 
+    plot.subtitle = element_text(margin = margin(b = 10)), 
+    plot.caption = element_text(size = 9, color = "grey40"), 
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.title.y = element_text(margin = margin(r = 8)),
+    axis.title.x = element_text(margin = margin(t = 8)),
+    legend.position = "bottom"
+  )
+```
+
+
 ```{r}
 #filter for poverty status
 ipums %>%
@@ -209,7 +227,7 @@ ggplot(panel_clean2, aes(x = log_minw, y = poverty_rate)) +
   geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) + 
   labs(title = "Poverty vs. Minimum Wage", 
        x = "Log(Minimum Wage)", 
-       y = "Poverty Rate")
+       y = "Poverty Rate") + theme_slide
 ```
 
 The scatterplot shows a negative relationship between poverty rates and real per capita income across states and years. As income levels rise, poverty rates consistently decline, which aligns with economic theory that higher income improves household well-being and reduces the share of individuals living below the poverty threshold. The fitted regression line highlights a moderately strong downward slope, suggesting that even small proportional increases in per capita income are associated with measurable reductions in state-level poverty. This relationship provides early support for including real per capita income as a key control variable in assessing the effects of minimum wage policy on poverty.
@@ -219,7 +237,7 @@ The scatterplot shows a negative relationship between poverty rates and real per
 #poverty vs. income
 ggplot(panel_clean2, aes(x = log_income, y = poverty_rate)) +
   geom_point(alpha = 0.6, color = "black") + geom_smooth(method = "lm", se = FALSE, color = "orange", size = 1) + 
-  labs(title = "Poverty vs Real Per Capita Income", x = "Log(Income)", y = "Poverty Rate")
+  labs(title = "Poverty vs Real Per Capita Income", x = "Log(Income)", y = "Poverty Rate") + theme_slide
 ```
 
 The relationship visualized between poverty rates and the log of minimum wage was also negative. though somewhat weaker and more dispersed than that observed for income. States with higher minimum wages generally exhibit lower poverty rates, but the wider scatter reflects that wage policy alone does not fully explain poverty variation across states. Still, the downward-sloping trend line indicates that increases in the minimum wage are correlated with lower poverty, supporting the hypothesis that higher wage floors can improve living standards for low-income workers. The visualization provides early evidence of the expected direction of the policy's impact. which will be tested more formally in the fixed-effects regressions. 
@@ -255,15 +273,56 @@ fe_model <- feols(
   cluster = ~ STATEFIP,
   weights = ~ pop_weight,
 )
-summary(fe_plot)
+summary(fe_model)
 
 #polished results of fixed effects regression
 etable(fe_model, digits = 3, title = "Fixed Effects Model: Poverty vs. Minimum Wage")
 ```
 
-The two-way fixed effects model, which controls for both state-specific (STATEFIP) and year effects (YEAR), estimates the within-state relationship between poverty rates and economic factors over time while accounting for unobserved state heterogeneity across states and national shocks that affect all states equally. After clustering standard errors at the state level and weighting by population, the model suggests that increases in minimum wage (log_minw) are associated with small, statistically insignificant reductions in poverty. The coefficient on real GDP (log_gdp) is negative and statistically significant at the 5% significance level, indicating that higher state-level economic output is linked to lower poverty rates, holding all else constant. Meanwhile, real per-capita income (log_income) and unemployment rate display the expected directions. Higher income correlates with lower poverty, whereas higher employment slightly raises poverty. It is important to note these are statistically insignificant. The R-squared value of 0.94 reflects a strong overall fit, likely driven by the inclusion of state and year fixed effects that absorb much of the variation across time and geography. The within R-sqaured of 0.043 indicates that only a modest share of within-state variation in poverty is explained by the included covariates, consistent with the notion that structural poverty dynamics evolve slowly. Overall, these results align with economic theory: while HDP growth and income levels have measureable impacts on poverty reduction, the short-run effects of minimum wage changes appear limited once broader economic conditions and fixed effects are controlled for. 
+The fixed-effects regression results indicate that, after accounting for state and year differences as well as macroeconomic controls, increases in the minimum wage are associated with statistically significant reductions in poverty. Specifically, the coefficient on log (minimum wage) is -0.012 and significant at the 0.1% level, implying that a 1% rise in the minimum wage corresponds to roughly a 0.012 percentage decline in the poverty rate, holding other factors constant. Both log (income per capita) (-0.048) and log (GDP) (0.001) are significant, with the income coefficient confirming that higher household income substantially reduces poverty, while GDP's small positive coefficient suggests that aggregate growth alone does not necessarily translate into immediate poverty alleviation at the household level. The unemployment rate also shows a small but significant positive association with poverty, consistent with expectations that higher unemployment elevates economic hardship. With a within R-squared of 0.57, the model explains over half of the variation in state-level poverty across time, underscoring that while minimum wage policy has a measurable effect, labor market conditions and income growth remain the dominant influences on poverty reduction between 2018 and 2023.  
 
 ```{r}
+coef_data <- tidy(fe_model, conf.int = T)
 
+coef_data %>%
+  filter(term == "log_minw") %>%
+  ggplot(aes(x = term, y = estimate)) + 
+  geom_point(color = "darkred", size = 3) + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, color = "gray40") + 
+  labs(title = "Effect of Log (Minimum Wage) on Poverty Rate", 
+       x = "", y = "Estimated Coefficient") + theme_minimal()
+``` 
+
+The coefficient plot displays the estimated relationship between the log of minimum wage and the state-level poverty rate from the fixed effects regression. The red dot represents the point estimate, while the gray vertical line shows the 95% confidence interval. The estimate of approximately -0.012 indicates that, while holding constant real per capita income, real GDP, and unemployment, a 1% increase in the minimum wage is associated with roughly a 0.012 percentage point decrease in the poverty rate. Although the direction is negative
+
+```{r}
+coef_keep <- c("log_minw", "log_income", "log_gdp", "unemployment_rate")
+
+coef_df <- tidy(fe_model, conf.int = T) %>%
+  filter(term %in% coef_keep) %>%
+  mutate(term = factor(term, 
+                       levels = rev(coef_keep), 
+                       labels = rev(c("Log (Min Wage)", "Log (Income Per Capita)", "Log (Real GDP)", "Unemployment Rate"))))
+
+p_coef <- ggplot(coef_df, aes(x = term, y = estimate)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  geom_pointrange(aes(ymin = conf.los, ymax = conf.high), size = 0.8) + 
+  coord_flip() + labs(
+    title = "Fixed Effects Model Coefficients", 
+    subtitle = "State & Year FE; clustered by state; pop-weighted", 
+    x = NULL, 
+    y = "Estimated effect on poverty rate (pp)"
+  ) + theme_slide
+
+ggplot(coef_df, aes(x = term, y = estimate)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") + 
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size = 0.8) + 
+  coord_flip() + labs(
+    title = "Fixed Effects Model Coefficients", 
+    subtitle = "State & Year FE; clustered by state; pop-weighted", 
+    x = NULL, 
+    y = "Estimated effect on poverty rate (pp)"
+  ) + theme_slide
 ```
 
+The fixed-effects model estimates show that, after controlling for real per capita income, real GDP, and unemployment, higher minimum wages are associated with slightly lower poverty rates across U.S.states between 2018 and 2023. The coefficient on log (min wage) is negative but small, suggesting that a 1% increase in minimum wage corresponds to an approximate 0.012 percentage point decline in the poverty rate, holding other factors constant, confirming a measurable poverty-reducing effect (albeit small). By comparison, log (income per capita) also exhibits a statistically significant and negative relationship with poverty, indicating that rising household incomes plays even a larger role in poverty alleviation. Meanwhile, both log (real GDP) and unemployment rate show small but statistically significant positive effects, suggesting that aggregate economic growth alone does not guarantee reductions in poverty, and that higher unemployment exacerbates financial hardship. Taken together, the results imply that state-level poverty reduction between 2018 and 2023 was most strongly influenced by household income gains and targeted wage policies, while broader macroeconomic growth provided less direct relief. 
