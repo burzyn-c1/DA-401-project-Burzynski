@@ -19,17 +19,20 @@ library(ggplot2)
 library(fixest)
 library(janitor)
 library(broom)
+library(data.table)
 
 #load in ipums (acs) dataset
-ipums <- read.csv("../../../usa_00003.csv.gz")
+ipums <- fread("../../../usa_00005.csv.gz") #used fread from the data.table package as the file is large and this allowed it to be loaded in much quicker
 
 #load minimum wage DOL data
-min_wage_data <- read.csv("..//..//..//Minimum Wage from DOL 2018-2024.csv")
+min_wage_data <- fread("..//../..//Minimum Wage from DOL 2010-2023.csv") #used fread to avoid X in front of year column names
 
 #load monthly unemployment rate data
-unemployment_rate_data <- read.csv("..//..//..//State unemployment rates over the last 10 years, seasonally adjusted_BLS.csv")
+unemployment_rate_data <- read.csv("..//..//..//state_unemploy_panel_copy_paste.csv")
 
 gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.csv", skip = 3)
+
+tail(ipums)
 ```
 
 
@@ -55,41 +58,52 @@ theme_slide <- theme_minimal(base_size = 13) +
 ipums %>%
   distinct(POVERTY) %>%
   arrange(POVERTY) #investigating values of poverty 
-
-ipums_poverty <- ipums %>%
-  filter(EMPSTAT == 1, UHRSWORK >= 35, WKSWORK2 >= 6, AGE >= 18, AGE <= 64) %>%
-  mutate(
-    in_poverty = ifelse(OFFPOV == 1, 1, 0), 
-    valid = ifelse(OFFPOV %in% c(0, 1), 1, 0)
-  ) %>%
-  filter(valid == 1) %>%
-  group_by(STATEFIP, YEAR) %>%
-  summarise(
-    poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = TRUE),
-    pop_weight = sum(PERWT, na.rm = TRUE), 
-    .groups = 'drop'
-  )
-#pop_weight represents the estimated total number of individuals represented by the ACS sample in that state-year 
-
+summary(ipums$POVERTY)
+summary(ipums$EMPSTAT)
 
 ```
+
+
+```{r}
+ipums_poverty <- ipums %>%
+  filter(EMPSTAT == 1, UHRSWORK >= 35, WKSWORK2 >= 6, AGE >= 18, AGE <= 64) %>%
+  mutate(POVERTY = as.numeric(POVERTY)) %>%
+  mutate(in_poverty = case_when(
+    is.na(POVERTY) ~ NA_real_,
+    POVERTY < 100 ~ 1, 
+    POVERTY >= 100 ~ 0
+  ), 
+    low_wage = if_else(POVERTY <= 150, 1L, 0L, missing = NA_integer_) #using 150 as the cutoff as most analyses go beyond strict poverty to include near-poor population. Many federal programs use 125 to 150% and my analysis focuses on poverty or near poverty populations
+  ) %>%
+  filter(low_wage == 1) %>%
+  group_by(STATEFIP, YEAR) %>%
+  summarise(
+    poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = T), 
+    pop_weight = sum(PERWT, na.rm = T), 
+    .groups = "drop"
+  )
+#pop_weight represents the estimated total number of individuals represented by the ACS sample in that state-year 
+```
+
+
+
 
 ```{r}
 min_wage_long <- min_wage_data %>%
   rename_with(~str_remove(., "^X"), starts_with("X")) %>% #cleans columns with 'X' prefix
   pivot_longer(
-    cols = all_of(as.character(2018:2024)),
+    cols = all_of(as.character(2010:2023)),
     names_to = "YEAR",
     values_to = "min_wage"
   ) %>%
   mutate(
     YEAR = as.numeric(YEAR)
   ) %>%
-  filter(between(YEAR, 2018, 2023))
+  filter(between(YEAR, 2010, 2023))
 ```
 
 ```{r}
-#pivot unemplyoment rate data to long format
+#pivot unemployment rate data to long format
 
 #replaces "." with "-" for month and year columns
 unemployment_rate_rename <- unemployment_rate_data %>%
@@ -111,7 +125,7 @@ unemployment_long <- unemployment_numeric %>%
     date = my(date_string), 
     YEAR = year(date)
   ) %>%
-  filter(!is.na(date), between(YEAR, 2018, 2023)) %>%
+  filter(!is.na(date), between(YEAR, 2010, 2023)) %>%
   group_by(State, YEAR) %>%
   summarise(unemployment_rate = mean(unemployment_rate, na.rm = TRUE), .groups = 'drop')
 ```
@@ -120,9 +134,9 @@ unemployment_long <- unemployment_numeric %>%
 gdp_income_long <- gdp_income %>%
   rename_with(~str_remove(., "^X"), starts_with("X")) %>%
   filter(LineCode %in% c(1, 8)) %>%
-  select(GeoName, GeoFips, LineCode, all_of(as.character(2018:2023))) %>%
+  select(GeoName, GeoFips, LineCode, all_of(as.character(2010:2023))) %>%
   pivot_longer(
-    cols = all_of(as.character(2018:2023)),
+    cols = all_of(as.character(2010:2023)),
     names_to = "YEAR",
     values_to = "value"
   ) %>%
@@ -210,6 +224,8 @@ ggplot(plot_data, aes(x = as.numeric(as.character(YEAR)), y = poverty_rate, colo
        subtitle = "Average poverty rates before and after minimum wage increases",
        x = "Year", y = "Mean Povery Rate", color = "Group") + 
   theme_minimal()
+
+ggsave(filename = "parallel_trend_plot.png", dpi = 300)
 ```
 
 The parallel trends visualization above compares the average poverty rates between treated states (those with minimum wages above \$7.25) and control states (those maintaining the federal minimum) from 2018 to 2023. Prior to policy changes, both groups appear to exhibit stable but distinct trajectories. This results in the treated states showing consistently lower poverty levels, while control states experience slightly higher rates. Although the two groups are not perfectly parallel in the pre-treatment period, their trends move in broadly similar directions, especially before 2020, suggesting that parallel trends assumption is reasonably plausible. The post-2020 divergence, particularly the sharper increase among control states, is consistent with the hypothesis that minimum wage increases may have mitigated poverty growth in treated states following the economic disruptions of Covid-19. Moving from 2022 to 2023, we can see the treatment and control group start to follow similar trends.
@@ -238,6 +254,8 @@ The scatterplot shows a negative relationship between poverty rates and real per
 ggplot(panel_clean2, aes(x = log_income, y = poverty_rate)) +
   geom_point(alpha = 0.6, color = "black") + geom_smooth(method = "lm", se = FALSE, color = "orange", size = 1) + 
   labs(title = "Poverty vs Real Per Capita Income", x = "Log(Income)", y = "Poverty Rate") + theme_slide
+
+ggsave(filename = "log_income_vs_poverty_rate.png", dpi = 400)
 ```
 
 The relationship visualized between poverty rates and the log of minimum wage was also negative. though somewhat weaker and more dispersed than that observed for income. States with higher minimum wages generally exhibit lower poverty rates, but the wider scatter reflects that wage policy alone does not fully explain poverty variation across states. Still, the downward-sloping trend line indicates that increases in the minimum wage are correlated with lower poverty, supporting the hypothesis that higher wage floors can improve living standards for low-income workers. The visualization provides early evidence of the expected direction of the policy's impact. which will be tested more formally in the fixed-effects regressions. 
@@ -273,6 +291,7 @@ fe_model <- feols(
   cluster = ~ STATEFIP,
   weights = ~ pop_weight,
 )
+
 summary(fe_model)
 
 #polished results of fixed effects regression
@@ -306,7 +325,7 @@ coef_df <- tidy(fe_model, conf.int = T) %>%
 
 p_coef <- ggplot(coef_df, aes(x = term, y = estimate)) + 
   geom_hline(yintercept = 0, linetype = "dashed") + 
-  geom_pointrange(aes(ymin = conf.los, ymax = conf.high), size = 0.8) + 
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), size = 0.8) + 
   coord_flip() + labs(
     title = "Fixed Effects Model Coefficients", 
     subtitle = "State & Year FE; clustered by state; pop-weighted", 
@@ -323,6 +342,11 @@ ggplot(coef_df, aes(x = term, y = estimate)) +
     x = NULL, 
     y = "Estimated effect on poverty rate (pp)"
   ) + theme_slide
+
+ggsave(filename = "Fixed_effects_coef_plot.png", dpi = 300)
 ```
 
 The fixed-effects model estimates show that, after controlling for real per capita income, real GDP, and unemployment, higher minimum wages are associated with slightly lower poverty rates across U.S.states between 2018 and 2023. The coefficient on log (min wage) is negative but small, suggesting that a 1% increase in minimum wage corresponds to an approximate 0.012 percentage point decline in the poverty rate, holding other factors constant, confirming a measurable poverty-reducing effect (albeit small). By comparison, log (income per capita) also exhibits a statistically significant and negative relationship with poverty, indicating that rising household incomes plays even a larger role in poverty alleviation. Meanwhile, both log (real GDP) and unemployment rate show small but statistically significant positive effects, suggesting that aggregate economic growth alone does not guarantee reductions in poverty, and that higher unemployment exacerbates financial hardship. Taken together, the results imply that state-level poverty reduction between 2018 and 2023 was most strongly influenced by household income gains and targeted wage policies, while broader macroeconomic growth provided less direct relief. 
+
+
+
