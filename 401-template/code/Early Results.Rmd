@@ -404,6 +404,31 @@ by_state %>%
   )
 ```
 
+```{r}
+#merge first treatment back to main panel
+panel_did <- panel_clean2 %>%
+  left_join(by_state %>% select(STATEFIP, first_treat), by = "STATEFIP") 
+
+#filter for staggered did
+stag_did <- panel_did %>%
+  filter(!STATEFIP %in% always_treated) #removed always treated; states with no pre-period as minimum wage was always above 7.25
+```
+
+```{r}
+#Timing of First minimum wage increases above 7.25 by year
+by_state %>%
+  filter(!STATEFIP %in% always_treated, !is.na(first_treat)) %>%
+  ggplot(aes(x = as.factor(first_treat))) + 
+  geom_bar(fill = "blue") + 
+  labs(
+    title = "Timing of First Minimum Wage Increases Above $7.25",
+    x = "First Treatment Year", 
+    y = "Number of States"
+  ) + theme_minimal(base_size = 13)
+```
+
+
+
 
 ```{r}
 did_out <- att_gt(
