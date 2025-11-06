@@ -86,8 +86,6 @@ ipums_poverty <- ipums %>%
 ```
 
 
-
-
 ```{r}
 min_wage_long <- min_wage_data %>%
   rename_with(~str_remove(., "^X"), starts_with("X")) %>% #cleans columns with 'X' prefix
@@ -102,33 +100,6 @@ min_wage_long <- min_wage_data %>%
   filter(between(YEAR, 2010, 2023))
 ```
 
-```{r}
-#pivot unemployment rate data to long format
-
-#replaces "." with "-" for month and year columns
-unemployment_rate_rename <- unemployment_rate_data %>%
-  rename_with(~ str_replace_all(.x, "\\.", "-"), .cols = -State)
-
-#helps match structure of month-year columns 
-month_cols <- grep("^[A-Za-z]{3}-\\d{2,4}$", names(unemployment_rate_rename), value = TRUE)
-
-unemployment_numeric <- unemployment_rate_rename %>%
-  mutate(across(all_of(month_cols), ~ parse_number(as.character(.))))
-
-unemployment_long <- unemployment_numeric %>%
-  pivot_longer(
-    cols = all_of(month_cols), 
-    names_to = "date_string", 
-    values_to = "unemployment_rate"
-  ) %>%
-  mutate(
-    date = my(date_string), 
-    YEAR = year(date)
-  ) %>%
-  filter(!is.na(date), between(YEAR, 2010, 2023)) %>%
-  group_by(State, YEAR) %>%
-  summarise(unemployment_rate = mean(unemployment_rate, na.rm = TRUE), .groups = 'drop')
-```
 
 ```{r}
 gdp_income_long <- gdp_income %>%
@@ -158,23 +129,40 @@ gdp_income_long <- gdp_income %>%
 ```
 
 ```{r}
-unemployment_with_fips <- unemployment_long %>%
+min_wage_long <- min_wage_long %>%
+  rename(state=State) %>%
+  rename(year=YEAR)#rename to get characters the same for merge
+
+unemployment_with_fips <- unemployment_rate_data %>%
   left_join(
     min_wage_long %>%
-      distinct(State, StateFIPS) %>%
-      transmute(State, STATEFIP = as.integer(StateFIPS)), 
-    by = "State"
+      distinct(state, StateFIPS) %>%
+      transmute(state, STATEFIP = as.integer(StateFIPS)), 
+    by = "state"
   ) %>%
-  transmute(STATEFIP, YEAR, unemployment_rate)
+  transmute(STATEFIP, year, annual_unemp_sa)
+```
+
+
+```{r}
+#filter out years within unemployment_with_fips
+unemployment_with_fips <- unemployment_with_fips %>%
+  filter(year > 2009 & year < 2024)
+
+#rename columns for lowercase match
+ipums_poverty <- ipums_poverty %>%
+  rename(year=YEAR)
+gdp_income_long <- gdp_income_long %>%
+  rename(year=YEAR)
 ```
 
 ```{r}
 #merging datasets
 panel_data <- ipums_poverty %>%
-  left_join(min_wage_long %>% transmute(STATEFIP = as.integer(StateFIPS), YEAR, min_wage), 
-            by = c("STATEFIP", "YEAR")) %>%
-  left_join(unemployment_with_fips, by = c("STATEFIP", "YEAR")) %>%
-  left_join(gdp_income_long, by = c("STATEFIP", "YEAR"))
+  left_join(min_wage_long %>% transmute(STATEFIP = as.integer(StateFIPS), year, min_wage), 
+            by = c("STATEFIP", "year")) %>%
+  left_join(unemployment_with_fips, by = c("STATEFIP", "year")) %>%
+  left_join(gdp_income_long, by = c("STATEFIP", "year"))
 
 
 #filter out district of columbia
@@ -184,7 +172,11 @@ panel_clean <- panel_data %>%
 #summary of data
 summary(panel_clean)
 names(panel_clean)
+
+
 ```
+
+
 
 ```{r}
 #check data distributions
@@ -208,6 +200,10 @@ panel_clean2 <- panel_clean %>%
          log_minw = log(pmax(min_wage, 1)), 
          treated_minw = as.integer(min_wage > 7.25))
   
+
+#based on the scaling for poverty_rate, converting to a percent scale makes sense for ease of interpretability. 
+panel_clean2 <- panel_clean2 %>%
+  mutate(poverty_rate_pct = poverty_rate * 100)
 ```
 
 ```{r}
@@ -217,7 +213,7 @@ plot_data <- panel_clean2 %>%
   ungroup()
 
 
-ggplot(plot_data, aes(x = as.numeric(as.character(YEAR)), y = poverty_rate, color = Group)) + 
+ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_rate_pct, color = Group)) + 
   stat_summary(fun = "mean", geom = "line", size = 1.2) + 
   stat_summary(fun = "mean", geom = "point", size = 2.5) + 
   labs(title = "Parallel Trends Check: Treated vs. Control States",
@@ -228,17 +224,16 @@ ggplot(plot_data, aes(x = as.numeric(as.character(YEAR)), y = poverty_rate, colo
 ggsave(filename = "parallel_trend_plot.png", dpi = 300)
 ```
 
-The parallel trends visualization above compares the average poverty rates between treated states (those with minimum wages above \$7.25) and control states (those maintaining the federal minimum) from 2018 to 2023. Prior to policy changes, both groups appear to exhibit stable but distinct trajectories. This results in the treated states showing consistently lower poverty levels, while control states experience slightly higher rates. Although the two groups are not perfectly parallel in the pre-treatment period, their trends move in broadly similar directions, especially before 2020, suggesting that parallel trends assumption is reasonably plausible. The post-2020 divergence, particularly the sharper increase among control states, is consistent with the hypothesis that minimum wage increases may have mitigated poverty growth in treated states following the economic disruptions of Covid-19. Moving from 2022 to 2023, we can see the treatment and control group start to follow similar trends.
+The parallel trends plot compares the pre-treatment trajectories of mean poverty rates between states that enacted minimum wage increases (treated group) and those that did not ("control"). Prior to 2014, both groups follow roughly similar paths, with some variation around 2012 to 2014. Post-2014, both groups follow roughly similar paths, treated states exhibit a slightly higher level but maintain a broadly parallel movement, suggesting no sharp divergence in pre-trends. This visual evidence mostly supports the plausibility of parallel trends assumption required for difference-in-differences estimation, while indicating potential heterogeneity in post-treatment responses. 
 
 ```{r}
-ggplot(panel_clean2, aes(x = poverty_rate)) + geom_histogram(bins = 30, fill = "blue", color = "black") + labs(title = "Distribution of State-Year Poverty Rates")
-
+ggplot(panel_clean2, aes(x = poverty_rate_pct)) + geom_histogram(bins = 30, fill = "blue", color = "black") + labs(title = "Distribution of State-Year Poverty Rates")
 
 ```
 
 ```{r}
 #poverty vs minimum wage
-ggplot(panel_clean2, aes(x = log_minw, y = poverty_rate)) + 
+ggplot(panel_clean2, aes(x = log_minw, y = poverty_rate_pct)) + 
   geom_point(alpha = 0.6, color = "blue") + 
   geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) + 
   labs(title = "Poverty vs. Minimum Wage", 
@@ -251,9 +246,9 @@ The scatterplot shows a negative relationship between poverty rates and real per
 
 ```{r}
 #poverty vs. income
-ggplot(panel_clean2, aes(x = log_income, y = poverty_rate)) +
+ggplot(panel_clean2, aes(x = log_income, y = poverty_rate_pct)) +
   geom_point(alpha = 0.6, color = "black") + geom_smooth(method = "lm", se = FALSE, color = "orange", size = 1) + 
-  labs(title = "Poverty vs Real Per Capita Income", x = "Log(Income)", y = "Poverty Rate") + theme_slide
+  labs(title = "Poverty (Percentage Points) vs Real Per Capita Income", x = "Log(Income)", y = "Poverty Rate") + theme_slide
 
 ggsave(filename = "log_income_vs_poverty_rate.png", dpi = 400)
 ```
@@ -264,10 +259,10 @@ The relationship visualized between poverty rates and the log of minimum wage wa
 panel_clean2 %>%
   group_by(treated_minw) %>%
   summarise(
-    mean_poverty = mean(poverty_rate, na.rm = T),
+    mean_poverty = mean(poverty_rate_pct, na.rm = T),
     mean_minw = mean(min_wage, na.rm = T),
     mean_income = mean(real_per_capita_income, na.rm = T),
-    mean_unemp = mean(unemployment_rate, na.rm = T)
+    mean_unemp = mean(annual_unemp_sa, na.rm = T)
   )
 ```
 
@@ -277,16 +272,16 @@ str(panel_clean2)
 names(panel_clean2)
 
 #function "feols" is having issues with finding STATEFIP even though it is in the dataset
-vars_needed <- c("STATEFIP", "YEAR", "poverty_rate", "log_minw", "log_income", "log_gdp",
+vars_needed <- c("STATEFIP", "YEAR", "poverty_rate_pct", "log_minw", "log_income", "log_gdp",
                  "unemployment_rate", "pop_weight")
 setdiff(vars_needed, names(panel_clean2)) #returned character(0) so no actual issues with names
 
 #convert to factors
-panel_clean2$YEAR <- as.factor(as.numeric(panel_clean2$YEAR))
-panel_clean2$STATEFIP <- as.factor(as.numeric(panel_clean2$YEAR))
+panel_clean2$YEAR <- as.factor(as.numeric(panel_clean2$year))
+panel_clean2$STATEFIP <- as.factor(as.numeric(panel_clean2$year))
 
 fe_model <- feols(
-  poverty_rate ~ log_minw + log_income + log_gdp + unemployment_rate | STATEFIP + YEAR,
+  poverty_rate_pct ~ log_minw + log_income + log_gdp + annual_unemp_sa | STATEFIP + year,
   data = panel_clean2,
   cluster = ~ STATEFIP,
   weights = ~ pop_weight,
@@ -346,7 +341,6 @@ ggplot(coef_df, aes(x = term, y = estimate)) +
 ggsave(filename = "Fixed_effects_coef_plot.png", dpi = 300)
 ```
 
-The fixed-effects model estimates show that, after controlling for real per capita income, real GDP, and unemployment, higher minimum wages are associated with slightly lower poverty rates across U.S.states between 2018 and 2023. The coefficient on log (min wage) is negative but small, suggesting that a 1% increase in minimum wage corresponds to an approximate 0.012 percentage point decline in the poverty rate, holding other factors constant, confirming a measurable poverty-reducing effect (albeit small). By comparison, log (income per capita) also exhibits a statistically significant and negative relationship with poverty, indicating that rising household incomes plays even a larger role in poverty alleviation. Meanwhile, both log (real GDP) and unemployment rate show small but statistically significant positive effects, suggesting that aggregate economic growth alone does not guarantee reductions in poverty, and that higher unemployment exacerbates financial hardship. Taken together, the results imply that state-level poverty reduction between 2018 and 2023 was most strongly influenced by household income gains and targeted wage policies, while broader macroeconomic growth provided less direct relief. 
-
+The fixed effects model, estimated with state and year controls and weighted by person-level population weights, indicate that a 1% increase in the minimum wage is associated with an increase of approximately 1.18 percentage points in the poverty rate among low-income full-time workers. The relationship is marginally significant at the 5% significance level, though the direction of the effect is positive, suggesting that in this sample, states that raised their minimum wages saw slightly higher measured poverty rates within this subgroup, potentially reflecting composition effects of short-run employment adjustments. By contrast, the real per capita income coefficient is large and highly significant, as a 1% rise in average real per capita income is associated with a 8.6 percentage point decrease in poverty rate, confirming that broader income growth has a strong poverty-reducing impact. The coefficients on GDP and unemployment are not statistically significant once controlling for fixed effects, suggesting that these macroeconomic indicators explain relatively little of the within-state variation in poverty over time. 
 
 
