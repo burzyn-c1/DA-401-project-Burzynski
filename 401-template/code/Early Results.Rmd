@@ -32,6 +32,8 @@ unemployment_rate_data <- read.csv("..//..//..//state_unemploy_panel_copy_paste.
 
 gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.csv", skip = 3)
 
+cpi <- read_csv("../../../CPI_all_urban_import.csv") #got warning but data loaded in just fine
+
 tail(ipums)
 ```
 
