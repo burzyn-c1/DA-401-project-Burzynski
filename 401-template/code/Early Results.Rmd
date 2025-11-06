@@ -20,6 +20,7 @@ library(fixest)
 library(janitor)
 library(broom)
 library(data.table)
+library(did)
 
 #load in ipums (acs) dataset
 ipums <- fread("../../../usa_00005.csv.gz") #used fread from the data.table package as the file is large and this allowed it to be loaded in much quicker
@@ -35,6 +36,15 @@ gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.c
 cpi <- read_csv("../../../CPI_all_urban_import.csv") #got warning but data loaded in just fine
 
 tail(ipums)
+```
+```{r}
+#clean cpi a bit
+cpi2 <- cpi %>%
+  rename(year=Year) %>%
+  transmute(
+    year = as.integer(year), 
+    cpi_u = as.numeric(Annual)
+  ) 
 ```
 
 
@@ -100,6 +110,17 @@ min_wage_long <- min_wage_data %>%
     YEAR = as.numeric(YEAR)
   ) %>%
   filter(between(YEAR, 2010, 2023))
+
+min_wage_long <- min_wage_long %>%
+  rename(state=State) %>%
+  rename(year=YEAR)#rename to get characters the same for merge
+
+#add cpi data to account for real minimum wage
+base_2023 <- cpi2 %>% filter(year == 2023) %>% pull(cpi_u) #2023 will serve as base year
+
+min_wage_long <- min_wage_long %>%
+  left_join(cpi2, by = "year") %>%
+  mutate(min_wage_real = min_wage * (base_2023/cpi_u))
 ```
 
 
@@ -131,10 +152,6 @@ gdp_income_long <- gdp_income %>%
 ```
 
 ```{r}
-min_wage_long <- min_wage_long %>%
-  rename(state=State) %>%
-  rename(year=YEAR)#rename to get characters the same for merge
-
 unemployment_with_fips <- unemployment_rate_data %>%
   left_join(
     min_wage_long %>%
@@ -161,7 +178,7 @@ gdp_income_long <- gdp_income_long %>%
 ```{r}
 #merging datasets
 panel_data <- ipums_poverty %>%
-  left_join(min_wage_long %>% transmute(STATEFIP = as.integer(StateFIPS), year, min_wage), 
+  left_join(min_wage_long %>% transmute(STATEFIP = as.integer(StateFIPS), year, min_wage, min_wage_real), 
             by = c("STATEFIP", "year")) %>%
   left_join(unemployment_with_fips, by = c("STATEFIP", "year")) %>%
   left_join(gdp_income_long, by = c("STATEFIP", "year"))
@@ -190,7 +207,7 @@ ggplot(panel_clean, aes(x = real_gdp)) + geom_histogram(bins = 30, fill = "darkg
 ggplot(panel_clean, aes(x = real_per_capita_income)) + geom_histogram(bins = 30, fill = "darkblue", color = "white") + labs(title = "Distribution of Real Per Capita Income")
 
 #minimum wage 
-ggplot(panel_clean, aes(x = min_wage)) + geom_histogram(bins = 30, fill = "darkred", color = "white") + labs(title = "Distribution of Minimum Wage Across States")
+ggplot(panel_clean, aes(x = min_wage_real)) + geom_histogram(bins = 30, fill = "darkred", color = "white") + labs(title = "Distribution of Minimum Wage Across States")
 
 
 #due to skewness of variables and common practice in research, some log transformations will be applied
@@ -199,7 +216,7 @@ ggplot(panel_clean, aes(x = min_wage)) + geom_histogram(bins = 30, fill = "darkr
 panel_clean2 <- panel_clean %>%
   mutate(log_gdp = log(pmax(real_gdp, 1)), 
          log_income = log(pmax(real_per_capita_income, 1)), 
-         log_minw = log(pmax(min_wage, 1)), 
+         log_minw_real = log(pmax(min_wage_real, 1)), 
          treated_minw = as.integer(min_wage > 7.25))
   
 
@@ -235,7 +252,7 @@ ggplot(panel_clean2, aes(x = poverty_rate_pct)) + geom_histogram(bins = 30, fill
 
 ```{r}
 #poverty vs minimum wage
-ggplot(panel_clean2, aes(x = log_minw, y = poverty_rate_pct)) + 
+ggplot(panel_clean2, aes(x = log_minw_real, y = poverty_rate_pct)) + 
   geom_point(alpha = 0.6, color = "blue") + 
   geom_smooth(method = "lm", se = FALSE, color = "red", size = 1) + 
   labs(title = "Poverty vs. Minimum Wage", 
@@ -274,16 +291,16 @@ str(panel_clean2)
 names(panel_clean2)
 
 #function "feols" is having issues with finding STATEFIP even though it is in the dataset
-vars_needed <- c("STATEFIP", "YEAR", "poverty_rate_pct", "log_minw", "log_income", "log_gdp",
+vars_needed <- c("STATEFIP", "year", "poverty_rate_pct", "log_minw_real", "log_income", "log_gdp",
                  "unemployment_rate", "pop_weight")
 setdiff(vars_needed, names(panel_clean2)) #returned character(0) so no actual issues with names
 
 #convert to factors
 panel_clean2$YEAR <- as.factor(as.numeric(panel_clean2$year))
-panel_clean2$STATEFIP <- as.factor(as.numeric(panel_clean2$year))
+panel_clean2$STATEFIP <- as.factor(as.numeric(panel_clean2$STATEFIP))
 
 fe_model <- feols(
-  poverty_rate_pct ~ log_minw + log_income + log_gdp + annual_unemp_sa | STATEFIP + year,
+  poverty_rate_pct ~ log_minw_real + log_income + log_gdp + annual_unemp_sa | STATEFIP + year,
   data = panel_clean2,
   cluster = ~ STATEFIP,
   weights = ~ pop_weight,
@@ -295,13 +312,13 @@ summary(fe_model)
 etable(fe_model, digits = 3, title = "Fixed Effects Model: Poverty vs. Minimum Wage")
 ```
 
-The fixed-effects regression results indicate that, after accounting for state and year differences as well as macroeconomic controls, increases in the minimum wage are associated with statistically significant reductions in poverty. Specifically, the coefficient on log (minimum wage) is -0.012 and significant at the 0.1% level, implying that a 1% rise in the minimum wage corresponds to roughly a 0.012 percentage decline in the poverty rate, holding other factors constant. Both log (income per capita) (-0.048) and log (GDP) (0.001) are significant, with the income coefficient confirming that higher household income substantially reduces poverty, while GDP's small positive coefficient suggests that aggregate growth alone does not necessarily translate into immediate poverty alleviation at the household level. The unemployment rate also shows a small but significant positive association with poverty, consistent with expectations that higher unemployment elevates economic hardship. With a within R-squared of 0.57, the model explains over half of the variation in state-level poverty across time, underscoring that while minimum wage policy has a measurable effect, labor market conditions and income growth remain the dominant influences on poverty reduction between 2018 and 2023.  
+The two-way fixed effects output above, estimated with state and year fixed effects and population weights, revealed no statistically significant association between real minimum wage and state-level poverty rates among full-time low-wage workers. Although the coefficient on the log of minimum wage was positive, its large standard error indicates substantial uncertainty, and the overall within-state explanatory power of the model was minimal (within R2 of 0.007). These findings suggest that contemporaneous fixed effect estimates may obscure heterogeneous or lagged treatment effects, particularly in the context of staggered state-level minimum wage increases. Consequently, the next stage of analysis employs the staggered difference-in-differences framework proposed by Callaway & Sant'Anna (2021) to identify dynamic and heterogeneous policy effects over time. 
 
 ```{r}
 coef_data <- tidy(fe_model, conf.int = T)
 
 coef_data %>%
-  filter(term == "log_minw") %>%
+  filter(term == "log_minw_real") %>%
   ggplot(aes(x = term, y = estimate)) + 
   geom_point(color = "darkred", size = 3) + 
   geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, color = "gray40") + 
@@ -312,7 +329,7 @@ coef_data %>%
 The coefficient plot displays the estimated relationship between the log of minimum wage and the state-level poverty rate from the fixed effects regression. The red dot represents the point estimate, while the gray vertical line shows the 95% confidence interval. The estimate of approximately -0.012 indicates that, while holding constant real per capita income, real GDP, and unemployment, a 1% increase in the minimum wage is associated with roughly a 0.012 percentage point decrease in the poverty rate. Although the direction is negative
 
 ```{r}
-coef_keep <- c("log_minw", "log_income", "log_gdp", "unemployment_rate")
+coef_keep <- c("log_minw_real", "log_income", "log_gdp", "annual_unemp_sa")
 
 coef_df <- tidy(fe_model, conf.int = T) %>%
   filter(term %in% coef_keep) %>%
@@ -343,6 +360,61 @@ ggplot(coef_df, aes(x = term, y = estimate)) +
 ggsave(filename = "Fixed_effects_coef_plot.png", dpi = 300)
 ```
 
-The fixed effects model, estimated with state and year controls and weighted by person-level population weights, indicate that a 1% increase in the minimum wage is associated with an increase of approximately 1.18 percentage points in the poverty rate among low-income full-time workers. The relationship is marginally significant at the 5% significance level, though the direction of the effect is positive, suggesting that in this sample, states that raised their minimum wages saw slightly higher measured poverty rates within this subgroup, potentially reflecting composition effects of short-run employment adjustments. By contrast, the real per capita income coefficient is large and highly significant, as a 1% rise in average real per capita income is associated with a 8.6 percentage point decrease in poverty rate, confirming that broader income growth has a strong poverty-reducing impact. The coefficients on GDP and unemployment are not statistically significant once controlling for fixed effects, suggesting that these macroeconomic indicators explain relatively little of the within-state variation in poverty over time. 
+```{r}
+#identify treatment timing
+#reflects each state's first year of a minimum-wage increase above baseline
+panel_clean2 <- panel_clean2 %>%
+  mutate(binding_nominal = min_wage > 7.25)
 
+
+#classification of states
+by_state <- panel_clean2 %>%
+  group_by(STATEFIP) %>%
+  summarise(
+    binding_2010 = any(binding_nominal & year == 2010),
+    ever_binding = any(binding_nominal, na.rm = T),
+    ever_unbound = any(!binding_nominal, na.rm = T),
+    first_treat = ifelse(ever_binding & ever_unbound, 
+                         min(year[binding_nominal], na.rm = T),
+                         NA_integer_)
+  )
+
+head(by_state)
+```
+
+```{r}
+always_treated <- by_state %>%
+  filter(binding_2010 & !ever_unbound) %>%
+  pull(STATEFIP)
+
+never_treated <- by_state %>%
+  filter(!ever_binding) %>%
+  pull(STATEFIP)
+
+adopters <- by_state %>%
+  filter(!binding_2010 & ever_binding) %>%
+  pull(STATEFIP)
+  
+  
+by_state %>%
+  summarise(
+    always_treated = sum(binding_2010 & !ever_unbound),
+    never_treated = sum(!ever_binding), 
+    adopters = sum(!binding_2010 & ever_binding)
+  )
+```
+
+
+```{r}
+did_out <- att_gt(
+  yname = "poverty_rate_pct",
+  tname = "year",
+  idname = "STATEFIP", 
+  gname = "first_treat", 
+  xformla = ~ log_income + log_gdp + annual_unemp_sa,
+  data = panel_clean2,
+  clustervars = "STATEFIP",
+  weightsname = "pop_weight"
+)
+```
 
