@@ -143,12 +143,12 @@ gdp_income_long <- gdp_income %>%
       LineCode == 8 ~ "real_per_capita_income"
     )
   ) %>%
-  filter(STATEFIP >0) %>%
+  filter(STATEFIP >0 & STATEFIP != 11) %>%
   select(STATEFIP, YEAR, var, value, GeoName) %>%
   pivot_wider(names_from = var, values_from = value) %>%
   mutate(real_gdp = as.numeric(real_gdp), 
          real_per_capita_income = as.numeric(real_per_capita_income)
-         )
+         ) 
 ```
 
 ```{r}
@@ -159,7 +159,7 @@ unemployment_with_fips <- unemployment_rate_data %>%
       transmute(state, STATEFIP = as.integer(StateFIPS)), 
     by = "state"
   ) %>%
-  transmute(STATEFIP, year, annual_unemp_sa)
+  transmute(STATEFIP, year, annual_unemp_sa, state)
 ```
 
 
@@ -222,7 +222,9 @@ panel_clean2 <- panel_clean %>%
 
 #based on the scaling for poverty_rate, converting to a percent scale makes sense for ease of interpretability. 
 panel_clean2 <- panel_clean2 %>%
-  mutate(poverty_rate_pct = poverty_rate * 100)
+  mutate(poverty_rate_pct = poverty_rate * 100, 
+         STATEFIP = as.integer(STATEFIP), 
+         year = as.integer(year))
 ```
 
 ```{r}
@@ -295,9 +297,7 @@ vars_needed <- c("STATEFIP", "year", "poverty_rate_pct", "log_minw_real", "log_i
                  "unemployment_rate", "pop_weight")
 setdiff(vars_needed, names(panel_clean2)) #returned character(0) so no actual issues with names
 
-#convert to factors
-panel_clean2$YEAR <- as.factor(as.numeric(panel_clean2$year))
-panel_clean2$STATEFIP <- as.factor(as.numeric(panel_clean2$STATEFIP))
+
 
 fe_model <- feols(
   poverty_rate_pct ~ log_minw_real + log_income + log_gdp + annual_unemp_sa | STATEFIP + year,
@@ -360,64 +360,138 @@ ggplot(coef_df, aes(x = term, y = estimate)) +
 ggsave(filename = "Fixed_effects_coef_plot.png", dpi = 300)
 ```
 
+
+```{r}
+ipums_covariates <- ipums %>%
+  filter(GQ %in% c(1,2)) %>%              
+  group_by(STATEFIP, YEAR) %>%
+  summarise(
+    emp_rate = weighted.mean(EMPSTAT == 1, w = PERWT, na.rm = TRUE),
+    lfpr = weighted.mean(LABFORCE == 2, w = PERWT, na.rm = TRUE),
+    avg_hours = weighted.mean(UHRSWORK, w = PERWT, na.rm = TRUE),
+    med_income = Hmisc::wtd.quantile(INCTOT, weights = PERWT, probs = 0.5),
+    share_college = weighted.mean(EDUC >= 7, w = PERWT, na.rm = TRUE),
+    share_black = weighted.mean(RACE == 2, w = PERWT, na.rm = TRUE),
+    share_female = weighted.mean(SEX == 2, w = PERWT, na.rm = TRUE),
+    share_foodstmp = weighted.mean(FOODSTMP == 2, w = PERWT, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(STATEFIP = as.integer(STATEFIP)) %>%
+  filter(STATEFIP != 11)
+```
+
+
 ```{r}
 #identify treatment timing
 #reflects each state's first year of a minimum-wage increase above baseline
 panel_clean2 <- panel_clean2 %>%
   mutate(binding_nominal = min_wage > 7.25)
+class(panel_clean2$STATEFIP)
+class(ipums_covariates$STATEFIP)
 
+panel_clean2 <- panel_clean2 %>%
+  mutate(
+    STATEFIP = as.integer(STATEFIP),
+    year     = as.integer(year)
+  )
+
+ipums_covariates <- ipums_covariates %>%
+  mutate(
+    STATEFIP = as.integer(as.character(STATEFIP)),  
+    YEAR     = as.integer(YEAR)
+  )
+
+panel_clean2 <- panel_clean2 %>%
+  left_join(ipums_covariates %>% rename(year = YEAR), 
+            by = c("STATEFIP", "year"))
 
 #classification of states
 by_state <- panel_clean2 %>%
-  group_by(STATEFIP) %>%
+  group_by(STATEFIP, state) %>%
   summarise(
-    binding_2010 = any(binding_nominal & year == 2010),
-    ever_binding = any(binding_nominal, na.rm = T),
-    ever_unbound = any(!binding_nominal, na.rm = T),
-    first_treat = ifelse(ever_binding & ever_unbound, 
-                         min(year[binding_nominal], na.rm = T),
-                         NA_integer_)
+    binding_2010 = any(min_wage > 7.25 & year == 2010),
+    ever_binding = any(min_wage > 7.25, na.rm = TRUE),
+    ever_unbound = any(!(min_wage > 7.25), na.rm = TRUE),
+    first_treat  = ifelse(ever_binding & ever_unbound,
+                          min(year[min_wage > 7.25], na.rm = TRUE),
+                          NA_integer_),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    group = case_when(
+      binding_2010 & !ever_unbound ~ "always",
+      !ever_binding                ~ "never",
+      !binding_2010 & ever_binding ~ "adopter",
+      TRUE                         ~ "other"
+    ),
+    first_treat = ifelse(group == "never", 0L, first_treat),
+    first_treat = as.integer(first_treat)
   )
 
-head(by_state)
+
+table(by_state$group)
+
+length(intersect(unique(panel_clean2$STATEFIP), unique(ipums_covariates$STATEFIP)))
+# should be ~50 (excluding DC)
+sapply(c("emp_rate","med_income","share_college","share_foodstmp"),
+       \(v) sum(is.na(panel_clean2[[v]])))
 ```
 
-```{r}
-always_treated <- by_state %>%
-  filter(binding_2010 & !ever_unbound) %>%
-  pull(STATEFIP)
 
-never_treated <- by_state %>%
-  filter(!ever_binding) %>%
-  pull(STATEFIP)
-
-adopters <- by_state %>%
-  filter(!binding_2010 & ever_binding) %>%
-  pull(STATEFIP)
-  
-  
-by_state %>%
-  summarise(
-    always_treated = sum(binding_2010 & !ever_unbound),
-    never_treated = sum(!ever_binding), 
-    adopters = sum(!binding_2010 & ever_binding)
-  )
-```
 
 ```{r}
-#merge first treatment back to main panel
-panel_did <- panel_clean2 %>%
-  left_join(by_state %>% select(STATEFIP, first_treat), by = "STATEFIP") 
-
 #filter for staggered did
-stag_did <- panel_did %>%
-  filter(!STATEFIP %in% always_treated) #removed always treated; states with no pre-period as minimum wage was always above 7.25
+class(by_state$STATEFIP)
+class(panel_clean2$STATEFIP)
+
+
+stag_did <- panel_clean2 %>%
+  left_join(by_state %>% select(STATEFIP, first_treat, group), by = "STATEFIP") %>%
+  filter(group %in% c("adopter","never")) %>%
+  mutate(STATEFIPS = as.integer(STATEFIP)) 
+
+cohort_sizes <- stag_did %>%
+  distinct(STATEFIPS, first_treat) %>%
+  filter(first_treat != 0) %>%
+  count(first_treat, name = "n_states") %>%
+  arrange(first_treat)
+
+valid_cohorts <- cohort_sizes %>% filter(n_states >= 4) %>% pull(first_treat)
+
+stag_est <- stag_did %>%
+  filter(first_treat %in% valid_cohorts | first_treat == 0L)
+
+count(stag_est, first_treat, sort = TRUE)  # should show some 0s and some >0 cohorts
 ```
+
+
+
+Going forward, the staggered DiD estimator requires adequate overlap and enough treated units within each adoption cohort to provide sable group-time effects. The cohort table provided above shows that several early and late adoption cohorts contain very few adopting states (i.e. 2011, 2012, 2021). To avoid weak identification, good prediction in the propensity step, and convergence/overlap failures, I intend to follow standard practice an exclude cohorts that are low in numbers.
+
+
+```{r}
+stag_est_win <- stag_est %>%
+  mutate(event_time = if_else(first_treat == 0L, NA_integer_, year - first_treat)) %>%
+  filter(is.na(event_time) | (event_time >= -3 & event_time <= 5))
+
+stag_est_win <- stag_est_win %>%
+  mutate(
+    z_emp_rate   = scale(emp_rate)[,1],
+    z_med_income = scale(med_income)[,1],
+    z_college    = scale(share_college)[,1],
+    z_snap       = scale(share_foodstmp)[,1],
+    poverty_rate_pct = as.numeric(poverty_rate_pct)
+  ) %>%
+  drop_na(poverty_rate_pct, z_emp_rate, z_med_income, z_college, z_snap)
+```
+
+
+
 
 ```{r}
 #Timing of First minimum wage increases above 7.25 by year
 by_state %>%
-  filter(!STATEFIP %in% always_treated, !is.na(first_treat)) %>%
+  filter(!STATEFIP %in% first_treat, !is.na(first_treat)) %>%
   ggplot(aes(x = as.factor(first_treat))) + 
   geom_bar(fill = "blue") + 
   labs(
@@ -431,15 +505,108 @@ by_state %>%
 
 
 ```{r}
-did_out <- att_gt(
-  yname = "poverty_rate_pct",
-  tname = "year",
-  idname = "STATEFIP", 
-  gname = "first_treat", 
-  xformla = ~ log_income + log_gdp + annual_unemp_sa,
-  data = panel_clean2,
-  clustervars = "STATEFIP",
-  weightsname = "pop_weight"
+stag_est <- stag_est %>%
+  mutate(STATEFIPS = as.integer(STATEFIP)) #new state identifier
+att <- att_gt(
+  yname = "poverty_rate_pct", 
+  tname = "year", 
+  idname = "STATEFIPS",
+  gname = "first_treat",
+  data = stag_est, 
+  panel = T, 
+  control_group = "nevertreated",
+  clustervars = "STATEFIPS"
 )
+
+agg_overall <- aggte(att, type = "group") #overall att
+agg_dyn <- aggte(att, type = "dynamic") #event-study
+summary(agg_overall)
 ```
 
+On average, states that raised the minimum wage experienced a 1.25 percentage-point lower poverty rate relative to the never-treated comparison group, after treatment. However, the confidence interval includes zero (p > 0.05), so this estimate is not statistically significant at conventional levels. Potentially weak results due to limited power of model with few cohorts. 
+
+```{r}
+summary(agg_dyn)
+```
+
+The table above shows effect by event time (years relative to adoption for states). Pre-treatment shows now systematic pattern (-4 to -1), but estimates fluctuate and CIs overlap zero, indicating no strong pre-trend bias that is apparent. At treatment (0 to +3), negative effects appear, suggesting poverty falls modestly after wage increases, though not precisely estimated. Effects fade, remain small, and statistically insignificant for long-run period (+4 to +12). The event-study pattern is consistent with a short-run reduction in poverty following minimum-wage increases but not large or persistent enough to reject the null with high confidence.
+
+
+```{r}
+prepost_ok <- stag_est_win %>%
+  filter(first_treat != 0L) %>%
+  group_by(STATEFIPS, first_treat) %>%
+  summarise(
+    has_pre  = any(year <  first_treat),
+    has_post = any(year >= first_treat),
+    .groups = "drop"
+  ) %>%
+  filter(has_pre & has_post) %>%
+  pull(STATEFIPS)
+
+stag_est_win <- stag_est_win %>%
+  filter(first_treat == 0L | STATEFIPS %in% prepost_ok)
+
+stag_est_win %>% filter(first_treat != 0L) %>%
+  summarise(any_pre = any(event_time < 0, na.rm = TRUE),
+            any_post = any(event_time >= 0, na.rm = TRUE))
+```
+
+```{r}
+att_cov <- att_gt(
+  yname = "poverty_rate_pct",
+  tname = "year",
+  idname = "STATEFIPS",
+  gname = "first_treat",
+  xformla = ~ z_emp_rate + z_med_income,
+  data = stag_est_win,
+  panel = F,
+  control_group = "nevertreated",
+  clustervars = "STATEFIPS"
+)
+
+
+```
+ 
+```{r}
+agg_overall_cov <- aggte(att_cov, type = "group",   na.rm = TRUE)
+agg_dynamic_cov <- aggte(att_cov, type = "dynamic", na.rm = TRUE)
+
+summary(agg_overall_cov)
+summary(agg_dynamic_cov)
+
+```
+ 
+```{r}
+p_dyn <- ggdid(agg_dynamic_cov) +
+  labs(
+    title    = "Event Study: Minimum Wage → Poverty",
+    subtitle = "Callaway & Sant’Anna staggered DID (with controls)",
+    x = "Years since first increase",
+    y = "ATT (percentage points)"
+  ) +
+  theme_minimal(base_size = 14)
+
+print(p_dyn)
+```
+ 
+
+ 
+```{r}
+att_cov_nyt <- att_gt(
+  yname = "poverty_rate_pct",
+  tname = "year",
+  idname = "STATEFIPS",
+  gname = "first_treat",
+  xformla = ~ z_emp_rate + z_med_income + z_college + z_snap,
+  data = stag_est_win,
+  panel = FALSE,
+  control_group = "notyettreated",
+  clustervars = "STATEFIPS"
+)
+
+agg_dynamic_nyt <- aggte(att_cov_nyt, type = "dynamic", na.rm = TRUE)
+ggdid(agg_dynamic_nyt)
+```
+ 
+ 
