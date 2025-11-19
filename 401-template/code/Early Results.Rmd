@@ -610,3 +610,195 @@ ggdid(agg_dynamic_nyt)
 ```
  
  
+ 
+#Section for polishing current graphs
+```{r}
+custom_theme <- theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10),
+    plot.caption = element_text(size = 8, hjust = 0),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    legend.title = element_blank()
+  )
+```
+
+```{r}
+fig1 <- ggplot(panel_clean2, aes(x = log_minw_real, y = poverty_rate_pct)) +
+  geom_point(color = "steelblue", alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(
+    title = "Figure 1: Poverty vs Log(Minimum Wage)",
+    subtitle = "State-year observations for full-time low-wage workers (2010–2023)",
+    x = "Log(Minimum Wage, real 2023 dollars)",
+    y = "Poverty Rate (%)",
+    caption = "Notes: Each point represents a state-year. The red line is a linear fit."
+  ) +
+  custom_theme
+
+ggsave("fig1_poverty_vs_log_minwage.png", fig1, width = 6, height = 4.5, dpi = 300)
+
+```
+
+```{r}
+fig2 <- ggplot(panel_clean2, aes(x = log_income, y = poverty_rate_pct)) +
+  geom_point(color = "darkgray", alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "orange") +
+  labs(
+    title = "Figure 2: Poverty vs Log(Real Per Capita Income)",
+    subtitle = "State-year observations for full-time low-wage workers (2010–2023)",
+    x = "Log(Real Per Capita Income, 2023 dollars)",
+    y = "Poverty Rate (%)",
+    caption = "Notes: Each point represents a state-year. The orange line is a linear fit."
+  ) +
+  custom_theme
+
+ggsave("fig2_poverty_vs_log_income.png", fig2, width = 6, height = 4.5, dpi = 300)
+
+```
+
+```{r}
+fig3 <- ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_rate_pct, color = Group)) +
+  stat_summary(fun = "mean", geom = "line", size = 1.2) + 
+  stat_summary(fun = "mean", geom = "point", size = 2.5) +
+  labs(
+    title = "Figure 3: Parallel Trends Check (Treated vs Control States)",
+    subtitle = "Average poverty rates for full-time low-wage workers",
+    x = "Year",
+    y = "Mean Poverty Rate (%)",
+    caption = "Notes: 'Treated' states raised their minimum wage above $7.25; 'Control' states never did."
+  ) +
+  custom_theme +
+  theme(legend.position = "bottom")
+
+ggsave("fig3_parallel_trends.png", fig3, width = 6.5, height = 4.5, dpi = 300)
+
+```
+
+
+```{r}
+plot_data <- panel_clean2 %>%
+  group_by(STATEFIP) %>%
+  mutate(Group = ifelse(any(min_wage > 7.25), "Treated", "Control")) %>%
+  ungroup()
+
+
+ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_rate_pct, color = Group)) + 
+  stat_summary(fun = "mean", geom = "line", size = 1.2) + 
+  stat_summary(fun = "mean", geom = "point", size = 2.5) + 
+  labs(title = "Parallel Trends Check: Treated vs. Control States",
+       subtitle = "Average poverty rates before and after minimum wage increases",
+       x = "Year", y = "Mean Povery Rate", color = "Group") + 
+  theme_minimal()
+
+ggsave(filename = "parallel_trend_plot.png", dpi = 300)
+```
+
+
+
+```{r}
+fig4 <- by_state %>%
+  filter(!STATEFIP %in% first_treat, !is.na(first_treat)) %>%
+  ggplot(aes(x = as.factor(first_treat))) +
+  geom_bar(fill = "blue") +
+  labs(
+    title = "Figure 4: Timing of First Minimum Wage Increases",
+    subtitle = "States that never increased above $7.25 are coded as 0",
+    x = "First Treatment Year",
+    y = "Number of States",
+    caption = "Notes: The treatment year is the first year a state’s minimum wage exceeded $7.25 during 2010–2023."
+  ) +
+  custom_theme
+ggsave("fig4_first_treat_histogram.png", fig4, width = 6, height = 4.5, dpi = 300)
+```
+
+
+```{r}
+# Figure 5: Event Study – Minimum Wage → Poverty
+p_dyn <- ggdid(agg_dynamic_cov) +
+  labs(
+    title    = "Figure 5: Event Study – Minimum Wage → Poverty",
+    subtitle = "Callaway & Sant’Anna staggered DID (with controls)",
+    x        = "Years since first increase",
+    y        = "ATT (percentage points)",
+    caption  = "Notes: Points show group-time ATT relative to first increase; vertical bars represent 95% CIs. Pre-treatment periods in red; post-treatment in blue."
+  ) +
+  custom_theme
+
+
+# Save high-res
+ggsave("fig5_event_study.png", p_dyn, width = 7, height = 5, dpi = 300)
+
+print(p_dyn)
+
+
+```
+
+```{r}
+p_exp <- ggdid(agg_dynamic_nyt) +
+  labs(
+    title    = "Figure 6: Average Effect by Length of Exposure",
+    subtitle = "ATT by exposure year relative to first minimum wage increase (not-yet-treated controls)",
+    x        = "Exposure year (relative to first increase)",
+    y        = "ATT (percentage points)",
+    caption  = "Notes: Year 0 marks the first increase; vertical bars represent 95% CIs. Pre-treatment periods in red; post-treatment in blue."
+  ) +
+  custom_theme
+
+
+# Save high-res
+ggsave("fig6_avg_effect_exposure.png", p_exp, width = 7, height = 5, dpi = 300)
+
+print(p_exp)
+```
+
+```{r}
+modelsummary::msummary(
+  list("Fixed Effects Model" = fe_model),
+  title   = "Table 1. Fixed Effects Model: Poverty vs. Minimum Wage",
+  gof_map = c("nobs", "r.squared"),
+  stars   = TRUE,
+  notes   = "Notes: State and year fixed effects; population weights applied; SEs clustered by state.",
+  output  = "Table1_FE.docx"        # <-- exported DOCX
+)
+
+
+```
+
+```{r}
+agg_group   <- aggte(att, type = "group")
+agg_dynamic <- aggte(att, type = "dynamic")
+
+table2_df <- bind_rows(
+  tibble(
+    Row = "Overall ATT (Group aggregation)",
+    ATT_pp = as.numeric(agg_group$overall.att),
+    Std_Error = as.numeric(agg_group$overall.se)
+  ),
+  tibble(
+    Row = "Overall ATT (Dynamic aggregation)",
+    ATT_pp = as.numeric(agg_dynamic$overall.att),
+    Std_Error = as.numeric(agg_dynamic$overall.se)
+  ),
+  tibble(
+    Row = paste0("Cohort ", agg_group$egt),
+    ATT_pp = as.numeric(agg_group$att.egt),
+    Std_Error = as.numeric(agg_group$se.egt)
+  )
+) |>
+  mutate(
+    CI_Lower_95 = ATT_pp - 1.96 * Std_Error,
+    CI_Upper_95 = ATT_pp + 1.96 * Std_Error
+  ) |>
+  mutate(across(c(ATT_pp, Std_Error, CI_Lower_95, CI_Upper_95), ~round(., 2)))
+
+#one-line export via modelsummary
+modelsummary::datasummary_df(
+  table2_df,
+  title  = "Table 2. Aggregated and Cohort-Specific ATT Estimates",
+  notes  = "Notes: Cluster-robust SEs by state. 'Overall (group)' and 'Overall (dynamic)' are from aggte(..., type='group'/'dynamic').",
+  output = "Table2_ATT.docx"   
+)
+```
+
