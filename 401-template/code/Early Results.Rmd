@@ -23,17 +23,17 @@ library(data.table)
 library(did)
 
 #load in ipums (acs) dataset
-ipums <- fread("../../../usa_00005.csv.gz") #used fread from the data.table package as the file is large and this allowed it to be loaded in much quicker
+ipums <- fread("./../data/usa_00005.csv.gz") #used fread from the data.table package as the file is large and this allowed it to be loaded in much quicker
 
 #load minimum wage DOL data
-min_wage_data <- fread("..//../..//Minimum Wage from DOL 2010-2023.csv") #used fread to avoid X in front of year column names
+min_wage_data <- fread("./../data/Minimum Wage from DOL 2010-2023.csv") #used fread to avoid X in front of year column names
 
 #load monthly unemployment rate data
-unemployment_rate_data <- read.csv("..//..//..//state_unemploy_panel_copy_paste.csv")
+unemployment_rate_data <- read.csv("./../data/state_unemploy_panel_copy_paste.csv")
 
-gdp_income <- read.csv("..//..//..//State Annual Summary Statistics GDP Income.csv", skip = 3)
+gdp_income <- read.csv("./../data/State Annual Summary Statistics GDP Income.csv", skip = 3)
 
-cpi <- read_csv("../../../CPI_all_urban_import.csv") #got warning but data loaded in just fine
+cpi <- read_csv("./../data/CPI_all_urban_import.csv") #got warning but data loaded in just fine
 
 tail(ipums)
 ```
