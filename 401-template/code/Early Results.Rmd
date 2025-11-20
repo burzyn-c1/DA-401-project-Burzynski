@@ -22,6 +22,7 @@ library(broom)
 library(data.table)
 library(did)
 
+
 #load in ipums (acs) dataset
 ipums <- fread("./../data/usa_00005.csv.gz") #used fread from the data.table package as the file is large and this allowed it to be loaded in much quicker
 
@@ -360,20 +361,35 @@ ggplot(coef_df, aes(x = term, y = estimate)) +
 ggsave(filename = "Fixed_effects_coef_plot.png", dpi = 300)
 ```
 
-
+#Covariate Extraction
 ```{r}
+#additional covariates
 ipums_covariates <- ipums %>%
-  filter(GQ %in% c(1,2)) %>%              
+  filter( #original poverty sample restriction
+    GQ %in% c(1,2), 
+    EMPSTAT == 1, 
+    UHRSWORK >= 35,
+    WKSWORK2 >= 6,
+    AGE >= 18, AGE <= 64
+  ) %>%
+  mutate(
+    POVERY = as.numeric(POVERTY), 
+    low_wage = if_else(POVERTY <= 150, 1L, 0L, missing = NA_integer_)
+  ) %>%
+  filter(low_wage == 1) %>%
   group_by(STATEFIP, YEAR) %>%
   summarise(
-    emp_rate = weighted.mean(EMPSTAT == 1, w = PERWT, na.rm = TRUE),
-    lfpr = weighted.mean(LABFORCE == 2, w = PERWT, na.rm = TRUE),
-    avg_hours = weighted.mean(UHRSWORK, w = PERWT, na.rm = TRUE),
-    med_income = Hmisc::wtd.quantile(INCTOT, weights = PERWT, probs = 0.5),
-    share_college = weighted.mean(EDUC >= 7, w = PERWT, na.rm = TRUE),
-    share_black = weighted.mean(RACE == 2, w = PERWT, na.rm = TRUE),
-    share_female = weighted.mean(SEX == 2, w = PERWT, na.rm = TRUE),
-    share_foodstmp = weighted.mean(FOODSTMP == 2, w = PERWT, na.rm = TRUE),
+    emp_rate = weighted.mean(EMPSTAT == 1, w = PERWT, na.rm = T), 
+    med_income = Hmisc::wtd.quantile(INCWAGE, weights = PERWT, probs = 0.5),
+    
+    #demographic composition
+    share_lowed = weighted.mean(EDUC <= 5, w = PERWT, na.rm = T),
+    share_nonwhite = weighted.mean(RACE != 1, w = PERWT, na.rm = T),
+    share_under30 = weighted.mean(AGE < 30, w = PERWT, na.rm = T),
+    
+    #assistance measures
+    share_foodstmp = weighted.mean(FOODSTMP == 2, w = PERWT, na.rm = T),
+    
     .groups = "drop"
   ) %>%
   mutate(STATEFIP = as.integer(STATEFIP)) %>%
@@ -475,14 +491,15 @@ stag_est_win <- stag_est %>%
   filter(is.na(event_time) | (event_time >= -3 & event_time <= 5))
 
 stag_est_win <- stag_est_win %>%
-  mutate(
-    z_emp_rate   = scale(emp_rate)[,1],
-    z_med_income = scale(med_income)[,1],
-    z_college    = scale(share_college)[,1],
-    z_snap       = scale(share_foodstmp)[,1],
-    poverty_rate_pct = as.numeric(poverty_rate_pct)
-  ) %>%
-  drop_na(poverty_rate_pct, z_emp_rate, z_med_income, z_college, z_snap)
+  mutate(z_emp_rate = scale(emp_rate)[,1], 
+         z_med_income = scale(med_income)[,1],
+         z_snap = scale(share_foodstmp)[,1],
+         z_share_lowed = scale(share_lowed)[,1],
+         z_share_nonwhite = scale(share_nonwhite)[,1],
+         z_share_under30 = scale(share_under30)[,1],
+         poverty_rate_pct = as.numeric(poverty_rate_pct)
+         ) %>%
+  drop_na(poverty_rate_pct, z_emp_rate, z_med_income, z_snap, z_share_lowed, z_share_nonwhite, z_share_under30)
 ```
 
 
