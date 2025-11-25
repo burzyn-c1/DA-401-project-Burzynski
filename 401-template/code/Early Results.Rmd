@@ -91,7 +91,7 @@ ipums_poverty <- ipums %>%
   filter(low_wage == 1) %>%
   group_by(STATEFIP, YEAR) %>%
   summarise(
-    poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = T), 
+    poverty_rate = weighted.mean(in_poverty, w = PERWT, na.rm = T), #weighted poverty indicator
     pop_weight = sum(PERWT, na.rm = T), 
     .groups = "drop"
   )
@@ -379,11 +379,10 @@ ipums_covariates <- ipums %>%
   filter(low_wage == 1) %>%
   group_by(STATEFIP, YEAR) %>%
   summarise(
-    emp_rate = weighted.mean(EMPSTAT == 1, w = PERWT, na.rm = T), 
     med_income = Hmisc::wtd.quantile(INCWAGE, weights = PERWT, probs = 0.5),
     
     #demographic composition
-    share_lowed = weighted.mean(EDUC <= 5, w = PERWT, na.rm = T),
+    share_lowedu = weighted.mean(EDUC <= 5, w = PERWT, na.rm = T),
     share_nonwhite = weighted.mean(RACE != 1, w = PERWT, na.rm = T),
     share_under30 = weighted.mean(AGE < 30, w = PERWT, na.rm = T),
     
@@ -444,13 +443,7 @@ by_state <- panel_clean2 %>%
     first_treat = as.integer(first_treat)
   )
 
-
-table(by_state$group)
-
-length(intersect(unique(panel_clean2$STATEFIP), unique(ipums_covariates$STATEFIP)))
-# should be ~50 (excluding DC)
-sapply(c("emp_rate","med_income","share_college","share_foodstmp"),
-       \(v) sum(is.na(panel_clean2[[v]])))
+summary(panel_clean2)
 ```
 
 
@@ -491,15 +484,16 @@ stag_est_win <- stag_est %>%
   filter(is.na(event_time) | (event_time >= -3 & event_time <= 5))
 
 stag_est_win <- stag_est_win %>%
-  mutate(z_emp_rate = scale(emp_rate)[,1], 
-         z_med_income = scale(med_income)[,1],
+  mutate(z_med_income = scale(med_income)[,1],
          z_snap = scale(share_foodstmp)[,1],
-         z_share_lowed = scale(share_lowed)[,1],
+         z_share_lowedu = scale(share_lowedu)[,1],
          z_share_nonwhite = scale(share_nonwhite)[,1],
          z_share_under30 = scale(share_under30)[,1],
          poverty_rate_pct = as.numeric(poverty_rate_pct)
          ) %>%
-  drop_na(poverty_rate_pct, z_emp_rate, z_med_income, z_snap, z_share_lowed, z_share_nonwhite, z_share_under30)
+  drop_na(poverty_rate_pct, z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30)
+
+summary(stag_est_win)
 ```
 
 
@@ -567,32 +561,48 @@ stag_est_win <- stag_est_win %>%
 stag_est_win %>% filter(first_treat != 0L) %>%
   summarise(any_pre = any(event_time < 0, na.rm = TRUE),
             any_post = any(event_time >= 0, na.rm = TRUE))
+summary(stag_est_win)
+table(stag_est_win$first_treat)
+```
+
+
+```{r}
+#number of states each year that increased
+stag_est_win %>%
+  group_by(first_treat) %>%
+  summarise(n_states = n_distinct(STATEFIPS), .groups = "drop")
 ```
 
 ```{r}
-att_cov <- att_gt(
+#check correlations of covariates as I was having errors trying to include all of them
+covars <- stag_est_win %>%
+  select(z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30, poverty_rate_pct)
+
+round(cor(covars, use = "pairwise.complete.obs"), 2)
+```
+
+
+```{r}
+att_cov_nyt <- att_gt(
   yname = "poverty_rate_pct",
   tname = "year",
   idname = "STATEFIPS",
   gname = "first_treat",
-  xformla = ~ z_emp_rate + z_med_income,
+  xformla = ~ z_share_lowedu + z_snap + z_med_income + z_share_nonwhite + z_med_income,
   data = stag_est_win,
   panel = F,
-  control_group = "nevertreated",
+  control_group = "notyettreated",
   clustervars = "STATEFIPS"
 )
 
 
-```
- 
-```{r}
-agg_overall_cov <- aggte(att_cov, type = "group",   na.rm = TRUE)
-agg_dynamic_cov <- aggte(att_cov, type = "dynamic", na.rm = TRUE)
+agg_overall_cov <- aggte(att_cov_nyt, type = "group",   na.rm = TRUE)
+agg_dynamic_cov <- aggte(att_cov_nyt, type = "dynamic", na.rm = TRUE)
 
 summary(agg_overall_cov)
 summary(agg_dynamic_cov)
-
 ```
+ 
  
 ```{r}
 p_dyn <- ggdid(agg_dynamic_cov) +
