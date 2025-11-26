@@ -471,6 +471,7 @@ stag_est <- stag_did %>%
   filter(first_treat %in% valid_cohorts | first_treat == 0L)
 
 count(stag_est, first_treat, sort = TRUE)  # should show some 0s and some >0 cohorts
+
 ```
 
 
@@ -481,17 +482,18 @@ Going forward, the staggered DiD estimator requires adequate overlap and enough 
 ```{r}
 stag_est_win <- stag_est %>%
   mutate(event_time = if_else(first_treat == 0L, NA_integer_, year - first_treat)) %>%
-  filter(is.na(event_time) | (event_time >= -3 & event_time <= 5))
+  filter(is.na(event_time) | (event_time >= -4 & event_time <= 7))
 
 stag_est_win <- stag_est_win %>%
   mutate(z_med_income = scale(med_income)[,1],
+         z_unemp = scale(annual_unemp_sa)[,1],
          z_snap = scale(share_foodstmp)[,1],
          z_share_lowedu = scale(share_lowedu)[,1],
          z_share_nonwhite = scale(share_nonwhite)[,1],
          z_share_under30 = scale(share_under30)[,1],
          poverty_rate_pct = as.numeric(poverty_rate_pct)
          ) %>%
-  drop_na(poverty_rate_pct, z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30)
+  drop_na(poverty_rate_pct, z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30, z_unemp)
 
 summary(stag_est_win)
 ```
@@ -526,7 +528,9 @@ att <- att_gt(
   data = stag_est, 
   panel = T, 
   control_group = "nevertreated",
-  clustervars = "STATEFIPS"
+  clustervars = "STATEFIPS",
+  bstrap = T,
+  biters = 500
 )
 
 agg_overall <- aggte(att, type = "group") #overall att
@@ -576,7 +580,7 @@ stag_est_win %>%
 ```{r}
 #check correlations of covariates as I was having errors trying to include all of them
 covars <- stag_est_win %>%
-  select(z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30, poverty_rate_pct)
+  select(z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30, annual_unemp_sa, poverty_rate_pct)
 
 round(cor(covars, use = "pairwise.complete.obs"), 2)
 ```
@@ -588,11 +592,13 @@ att_cov_nyt <- att_gt(
   tname = "year",
   idname = "STATEFIPS",
   gname = "first_treat",
-  xformla = ~ z_share_lowedu + z_snap + z_med_income + z_share_nonwhite + z_med_income,
+  xformla = ~ z_share_lowedu + z_unemp + z_snap + z_share_nonwhite,
   data = stag_est_win,
   panel = F,
   control_group = "notyettreated",
-  clustervars = "STATEFIPS"
+  clustervars = "STATEFIPS",
+  bstrap = T,
+  biters = 500
 )
 
 
@@ -617,27 +623,31 @@ p_dyn <- ggdid(agg_dynamic_cov) +
 print(p_dyn)
 ```
  
-
+#Robustness checks
  
 ```{r}
-att_cov_nyt <- att_gt(
+#changing control group; results should be roughly the same
+att_cov_never <- att_gt(
   yname = "poverty_rate_pct",
   tname = "year",
   idname = "STATEFIPS",
   gname = "first_treat",
-  xformla = ~ z_emp_rate + z_med_income + z_college + z_snap,
+  xformla = ~ z_share_lowedu + z_unemp + z_snap + z_share_nonwhite,
   data = stag_est_win,
-  panel = FALSE,
+  panel = F,
   control_group = "notyettreated",
-  clustervars = "STATEFIPS"
+  clustervars = "STATEFIPS", 
+  bstrap = T,
+  biters = 500
 )
 
-agg_dynamic_nyt <- aggte(att_cov_nyt, type = "dynamic", na.rm = TRUE)
-ggdid(agg_dynamic_nyt)
+agg_dyn_never <- aggte(att_cov_never, type = "dynamic", na.rm = T)
+summary(agg_dyn_never)
 ```
  
- 
- 
+Comparing the results from this difference-in-differences output which changes the control group to never-treated to the results of the difference-in-differences with not yet treated observations reveal similar results, which indicates findings are robust.
+
+
 #Section for polishing current graphs
 ```{r}
 custom_theme <- theme_minimal() +
@@ -743,10 +753,10 @@ ggsave("fig4_first_treat_histogram.png", fig4, width = 6, height = 4.5, dpi = 30
 
 ```{r}
 # Figure 5: Event Study – Minimum Wage → Poverty
-p_dyn <- ggdid(agg_dynamic_cov) +
+p_dyn <- ggdid(agg_dyn) +
   labs(
-    title    = "Figure 5: Event Study – Minimum Wage → Poverty",
-    subtitle = "Callaway & Sant’Anna staggered DID (with controls)",
+    title    = "Figure 5: Event Study – Minimum Wage & Poverty",
+    subtitle = "Callaway & Sant’Anna staggered DID (no controls)",
     x        = "Years since first increase",
     y        = "ATT (percentage points)",
     caption  = "Notes: Points show group-time ATT relative to first increase; vertical bars represent 95% CIs. Pre-treatment periods in red; post-treatment in blue."
@@ -763,10 +773,10 @@ print(p_dyn)
 ```
 
 ```{r}
-p_exp <- ggdid(agg_dynamic_nyt) +
+p_exp <- ggdid(agg_dynamic_cov) +
   labs(
     title    = "Figure 6: Average Effect by Length of Exposure",
-    subtitle = "ATT by exposure year relative to first minimum wage increase (not-yet-treated controls)",
+    subtitle = "ATT by exposure year relative to first minimum wage increase (with controls)",
     x        = "Exposure year (relative to first increase)",
     y        = "ATT (percentage points)",
     caption  = "Notes: Year 0 marks the first increase; vertical bars represent 95% CIs. Pre-treatment periods in red; post-treatment in blue."
@@ -826,6 +836,44 @@ modelsummary::datasummary_df(
   title  = "Table 2. Aggregated and Cohort-Specific ATT Estimates",
   notes  = "Notes: Cluster-robust SEs by state. 'Overall (group)' and 'Overall (dynamic)' are from aggte(..., type='group'/'dynamic').",
   output = "Table2_ATT.docx"   
+)
+```
+
+
+
+```{r}
+agg_group2   <- aggte(att_cov_nyt, type = "group", na.rm = T)
+agg_dynamic2 <- aggte(att_cov_nyt, type = "dynamic", na.rm = T)
+
+table3_df <- bind_rows(
+  tibble(
+    Row = "Overall ATT (Group aggregation)",
+    ATT_pp = as.numeric(agg_group2$overall.att),
+    Std_Error = as.numeric(agg_group2$overall.se)
+  ),
+  tibble(
+    Row = "Overall ATT (Dynamic aggregation)",
+    ATT_pp = as.numeric(agg_dynamic2$overall.att),
+    Std_Error = as.numeric(agg_dynamic2$overall.se)
+  ),
+  tibble(
+    Row = paste0("Cohort ", agg_group2$egt),
+    ATT_pp = as.numeric(agg_group2$att.egt),
+    Std_Error = as.numeric(agg_group2$se.egt)
+  )
+) |>
+  mutate(
+    CI_Lower_95 = ATT_pp - 1.96 * Std_Error,
+    CI_Upper_95 = ATT_pp + 1.96 * Std_Error
+  ) |>
+  mutate(across(c(ATT_pp, Std_Error, CI_Lower_95, CI_Upper_95), ~round(., 2)))
+
+#one-line export via modelsummary
+modelsummary::datasummary_df(
+  table3_df,
+  title  = "Table 3. Aggregated and Cohort-Specific ATT Estimates with Controls",
+  notes  = "Notes: Cluster-robust SEs by state. 'Overall (group)' and 'Overall (dynamic)' are from aggte(..., type='group'/'dynamic').",
+  output = "Table3_ATT.docx"   
 )
 ```
 
