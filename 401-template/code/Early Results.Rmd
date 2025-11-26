@@ -635,7 +635,7 @@ att_cov_never <- att_gt(
   xformla = ~ z_share_lowedu + z_unemp + z_snap + z_share_nonwhite,
   data = stag_est_win,
   panel = F,
-  control_group = "notyettreated",
+  control_group = "nevertreated",
   clustervars = "STATEFIPS", 
   bstrap = T,
   biters = 500
