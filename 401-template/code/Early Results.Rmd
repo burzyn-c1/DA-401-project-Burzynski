@@ -613,7 +613,7 @@ summary(agg_dynamic_cov)
 ```{r}
 p_dyn <- ggdid(agg_dynamic_cov) +
   labs(
-    title    = "Event Study: Minimum Wage → Poverty",
+    title    = "Event Study: Minimum Wage and Poverty",
     subtitle = "Callaway & Sant’Anna staggered DID (with controls)",
     x = "Years since first increase",
     y = "ATT (percentage points)"
@@ -759,7 +759,7 @@ p_dyn <- ggdid(agg_dyn) +
     subtitle = "Callaway & Sant’Anna staggered DID (no controls)",
     x        = "Years since first increase",
     y        = "ATT (percentage points)",
-    caption  = "Notes: Points show group-time ATT relative to first increase; vertical bars represent 95% CIs. Pre-treatment periods in red; post-treatment in blue."
+    caption  = "Notes: Points show group-time ATT relative to first increase; vertical bars represent 95% CIs. \nPre-treatment periods in red; post-treatment in blue."
   ) +
   custom_theme
 
@@ -779,7 +779,7 @@ p_exp <- ggdid(agg_dynamic_cov) +
     subtitle = "ATT by exposure year relative to first minimum wage increase (with controls)",
     x        = "Exposure year (relative to first increase)",
     y        = "ATT (percentage points)",
-    caption  = "Notes: Year 0 marks the first increase; vertical bars represent 95% CIs. Pre-treatment periods in red; post-treatment in blue."
+    caption  = "Notes: Year 0 marks the first increase; vertical bars represent 95% CIs. \nPre-treatment periods in red; post-treatment in blue."
   ) +
   custom_theme
 
