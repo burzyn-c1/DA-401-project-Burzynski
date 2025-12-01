@@ -752,10 +752,10 @@ ggsave("fig4_first_treat_histogram.png", fig4, width = 6, height = 4.5, dpi = 30
 
 
 ```{r}
-# Figure 5: Event Study – Minimum Wage → Poverty
+# Figure 1: Event Study – Minimum Wage → Poverty
 p_dyn <- ggdid(agg_dyn) +
   labs(
-    title    = "Figure 5: Event Study – Minimum Wage & Poverty",
+    title    = "Figure 1: Event Study – Minimum Wage & Poverty",
     subtitle = "Callaway & Sant’Anna staggered DID (no controls)",
     x        = "Years since first increase",
     y        = "ATT (percentage points)",
@@ -764,8 +764,7 @@ p_dyn <- ggdid(agg_dyn) +
   custom_theme
 
 
-# Save high-res
-ggsave("fig5_event_study.png", p_dyn, width = 7, height = 5, dpi = 300)
+ggsave("fig1_event_study.png", p_dyn, width = 7, height = 5, dpi = 300)
 
 print(p_dyn)
 
@@ -775,7 +774,7 @@ print(p_dyn)
 ```{r}
 p_exp <- ggdid(agg_dynamic_cov) +
   labs(
-    title    = "Figure 6: Average Effect by Length of Exposure",
+    title    = "Figure 2: Average Effect by Length of Exposure",
     subtitle = "ATT by exposure year relative to first minimum wage increase (with controls)",
     x        = "Exposure year (relative to first increase)",
     y        = "ATT (percentage points)",
@@ -785,7 +784,7 @@ p_exp <- ggdid(agg_dynamic_cov) +
 
 
 # Save high-res
-ggsave("fig6_avg_effect_exposure.png", p_exp, width = 7, height = 5, dpi = 300)
+ggsave("fig2_avg_effect_exposure.png", p_exp, width = 7, height = 5, dpi = 300)
 
 print(p_exp)
 ```
