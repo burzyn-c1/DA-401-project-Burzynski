@@ -774,11 +774,11 @@ print(p_dyn)
 ```{r}
 p_exp <- ggdid(agg_dynamic_cov) +
   labs(
-    title    = "Figure 2: Average Effect by Length of Exposure",
-    subtitle = "ATT by exposure year relative to first minimum wage increase (with controls)",
-    x        = "Exposure year (relative to first increase)",
-    y        = "ATT (percentage points)",
-    caption  = "Notes: Year 0 marks the first increase; vertical bars represent 95% CIs. \nPre-treatment periods in red; post-treatment in blue."
+    title    = "Figure 2: Average Effect by Length of Exposure ",
+    subtitle = "Estimated change in poverty among full-time low-wage workers by years since \nfirst state minimum wage increase (with controls)",
+    x        = "Years since first minimum wage increase",
+    y        = "Estimated change in poverty rate (percentage points)",
+    caption  = "Each point shows how poverty among full time low wage workers changed in states that raised their minimum wage, compared with states \nthat never did. Values to the left of zero represent years before the first increase and remain close to zero, which suggests that \nstates followed similar trends before the policy took effect. Beginning at year zero, when the minimum wage increases, the estimates \nbecome progressively more negative, showing that poverty declines over time. By two to five years after the increase, states display sizable \nreductions in poverty for full time low wage workers. Vertical bars represent 95 percent confidence intervals."
   ) +
   custom_theme
 
