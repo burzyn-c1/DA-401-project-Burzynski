@@ -752,7 +752,7 @@ ggsave("fig4_first_treat_histogram.png", fig4, width = 6, height = 4.5, dpi = 30
 
 
 ```{r}
-# Figure 1: Event Study – Minimum Wage → Poverty
+#Figure 1: Event Study – Minimum Wage → Poverty
 p_dyn <- ggdid(agg_dyn) +
   labs(
     title    = "Figure 1: Event Study – Minimum Wage & Poverty",
@@ -783,7 +783,7 @@ p_exp <- ggdid(agg_dynamic_cov) +
   custom_theme
 
 
-# Save high-res
+#save high-res
 ggsave("fig2_avg_effect_exposure.png", p_exp, width = 7, height = 5, dpi = 300)
 
 print(p_exp)
