@@ -526,7 +526,7 @@ stag_did_fe <- stag_did_fe %>%
 fe_model <- feols(
   poverty_rate_pct ~ log_minw_real + z_share_lowedu + z_unemp + z_snap + z_share_nonwhite | STATEFIP + year,
   data = stag_did_fe,
-  cluster = ~ STATEFIP,
+  cluster = ~ STATEFIPS,
   weights = ~ pop_weight,
 )
 
@@ -668,9 +668,9 @@ stag_did_fe2 <- stag_did_fe %>%
   ungroup()
   
 fe_lag <- feols(
-  poverty_rate_pct ~ minw_lag1 + minw_lag2 + z_share_lowedu + z_unemp + z_snap + z_share_nonwhite | STATEFIP + year,
+  poverty_rate_pct ~ minw_lag1 + minw_lag2 + z_share_lowedu + z_unemp + z_snap + z_share_nonwhite | STATEFIPS + year,
   data = stag_did_fe2,
-  cluster = ~ STATEFIP,
+  cluster = ~ STATEFIPS,
   weights = ~ pop_weight,
 )
 
@@ -885,30 +885,6 @@ ggsave("event_study_points_only_pre_green_post_red.png", p_es_noline,
 ```
 
 
-```{r}
-p_es <- ggplot(es_df, aes(x = egt, y = att)) +
-  geom_hline(yintercept = 0, color = "gray55", linewidth = 0.8, linetype = "dashed") +
-  geom_linerange(aes(ymin = ci_low, ymax = ci_high), color = "gray50", linewidth = 0.7) +
-  geom_line(aes(color = period), linewidth = 1.1) +
-  geom_point(aes(color = period), size = 2.8) +
-  scale_color_manual(values = c("Pre" = "gray50", "Post" = "red3")) +
-  labs(
-    title    = "Event Study – Minimum Wage & Poverty",
-    x        = "Years since first increase",
-    y        = "Average Treatment Effect on the Treated"
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    legend.position = "none",
-    panel.grid.minor = element_blank(),
-    axis.title = element_text(face = "bold")
-  )
-
-print(p_es)
-
-
-```
-
 
 
 
@@ -1014,6 +990,39 @@ modelsummary::datasummary_df(
   title  = "Table 3. Aggregated and Cohort-Specific ATT Estimates with Controls",
   notes  = "Notes: Cluster-robust SEs by state. 'Overall (group)' and 'Overall (dynamic)' are from aggte(..., type='group'/'dynamic').",
   output = "Table3_ATT.docx"   
+)
+```
+
+```{r}
+#table construction for fixed effects outputs
+models <- list(
+  "TWFE + Covariates" = fe_model,
+  "TWFE + State Trends" = fe_trend
+)
+
+coef_map <- c(
+  "log_minw_real"    = "Log real minimum wage",
+  "z_share_lowedu"   = "Low education share (z)",
+  "z_unemp"          = "Unemployment rate (z)",
+  "z_snap"           = "SNAP participation (z)",
+  "z_share_nonwhite" = "Nonwhite share (z)"
+)
+
+gof_map <- data.frame(
+  raw = c("nobs", "FE: STATEFIP", "FE: year"),
+  clean = c("Observations", "State FE", "Year FE"),
+  fmt = c(0, 0, 0)
+)
+
+modelsummary::msummary(
+  models,
+  coef_map = coef_map,
+  statistic = "({std.error})",
+  stars = TRUE,
+  fmt = 3,
+  gof_map = gof_map,
+  notes = "Population-weighted. Standard errors (in parentheses) clustered by state.", 
+  output = "fe_table_poster.docx"
 )
 ```
 
