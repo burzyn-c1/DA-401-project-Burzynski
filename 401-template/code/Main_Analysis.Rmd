@@ -801,8 +801,6 @@ fig3 <- ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_ra
     "Treated" = "red1"
   )) + 
   labs(
-    title = "Parallel Trends Check (Treated vs Control States)",
-    subtitle = "Average poverty rates for full-time low-wage workers",
     x = "Year",
     y = "Mean Poverty Rate (%)") +
   custom_theme +
@@ -848,7 +846,6 @@ es_df <- data.frame(
   )
 #Figure 1: Event Study – Minimum Wage → Poverty
 p_es_noline <- ggplot(es_df, aes(x = egt, y = att)) +
-  # zero line
   geom_hline(
     yintercept = 0,
     linetype = "dashed",
@@ -866,7 +863,6 @@ p_es_noline <- ggplot(es_df, aes(x = egt, y = att)) +
   ) +
   scale_color_manual(values = c("Pre" = "green4", "Post" = "red3")) +
   labs(
-    title    = "Event Study – Minimum Wage & Poverty",
     x        = "Years since first increase",
     y        = "Average Treatment Effect on the Treated"
   ) +
