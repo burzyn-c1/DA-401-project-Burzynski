@@ -293,15 +293,9 @@ panel_clean2 %>%
 str(panel_clean2)
 names(panel_clean2)
 
-#function "feols" is having issues with finding STATEFIP even though it is in the dataset
-vars_needed <- c("STATEFIP", "year", "poverty_rate_pct", "log_minw_real", "log_income", "log_gdp",
-                 "unemployment_rate", "pop_weight")
-setdiff(vars_needed, names(panel_clean2)) #returned character(0) so no actual issues with names
-
-
 
 fe_model <- feols(
-  poverty_rate_pct ~ log_minw_real + log_income + log_gdp + annual_unemp_sa | STATEFIP + year,
+  poverty_rate_pct ~ log_minw_real | STATEFIP + year,
   data = panel_clean2,
   cluster = ~ STATEFIP,
   weights = ~ pop_weight,
@@ -309,8 +303,7 @@ fe_model <- feols(
 
 summary(fe_model)
 
-#polished results of fixed effects regression
-etable(fe_model, digits = 3, title = "Fixed Effects Model: Poverty vs. Minimum Wage")
+
 ```
 
 The two-way fixed effects output above, estimated with state and year fixed effects and population weights, revealed no statistically significant association between real minimum wage and state-level poverty rates among full-time low-wage workers. Although the coefficient on the log of minimum wage was positive, its large standard error indicates substantial uncertainty, and the overall within-state explanatory power of the model was minimal (within R2 of 0.007). These findings suggest that contemporaneous fixed effect estimates may obscure heterogeneous or lagged treatment effects, particularly in the context of staggered state-level minimum wage increases. Consequently, the next stage of analysis employs the staggered difference-in-differences framework proposed by Callaway & Sant'Anna (2021) to identify dynamic and heterogeneous policy effects over time. 
@@ -423,24 +416,42 @@ panel_clean2 <- panel_clean2 %>%
 #classification of states
 by_state <- panel_clean2 %>%
   group_by(STATEFIP, state) %>%
-  summarise(
-    binding_2010 = any(min_wage > 7.25 & year == 2010),
-    ever_binding = any(min_wage > 7.25, na.rm = TRUE),
-    ever_unbound = any(!(min_wage > 7.25), na.rm = TRUE),
-    first_treat  = ifelse(ever_binding & ever_unbound,
-                          min(year[min_wage > 7.25], na.rm = TRUE),
-                          NA_integer_),
-    .groups = "drop"
-  ) %>%
+  arrange(year, .by_group = T) %>%
   mutate(
-    group = case_when(
-      binding_2010 & !ever_unbound ~ "always",
-      !ever_binding                ~ "never",
-      !binding_2010 & ever_binding ~ "adopter",
-      TRUE                         ~ "other"
-    ),
-    first_treat = ifelse(group == "never", 0L, first_treat),
-    first_treat = as.integer(first_treat)
+    delta_mw = min_wage - lag(min_wage), 
+    inc_any  = !is.na(delta_mw) & delta_mw > 0,
+    inc_50   = !is.na(delta_mw) & delta_mw >= 0.50,
+    inc_100  = !is.na(delta_mw) & delta_mw >= 1.00
+  ) %>%
+  summarise(ever_treated_any = any(inc_any, na.rm = T), 
+            first_treat_any = if (ever_treated_any) min(year[inc_any], na.rm = T) else 0L, 
+            
+            ever_treated_50 = any(inc_50, na.rm = T), 
+            first_treat_50 = if (ever_treated_50) min(year[inc_50], na.rm = T) else 0L, 
+            
+            ever_treated_100 = any(inc_100, na.rm = T), 
+            first_treat_100 = if (ever_treated_100) min(year[inc_100], na.rm = T) else 0L, 
+            .groups = "drop"
+            ) %>%
+  mutate(
+    group_any = ifelse(ever_treated_any, "adopter", "never"), 
+    first_treat_any = ifelse(group_any == "never", 0L, first_treat_any),
+    first_treat_any = as.integer(first_treat_any),
+
+    first_treat_50  = ifelse(ever_treated_50  == FALSE, 0L, first_treat_50),
+    first_treat_50  = as.integer(first_treat_50),
+
+    first_treat_100 = ifelse(ever_treated_100 == FALSE, 0L, first_treat_100),
+    first_treat_100 = as.integer(first_treat_100)
+  )
+
+panel_clean2 <- panel_clean2 %>%
+  left_join(by_state %>% select(STATEFIP, first_treat_any, first_treat_50, first_treat_100, group_any),
+            by = "STATEFIP") %>%
+    mutate(
+    treated_any  = as.integer(first_treat_any > 0L & year >= first_treat_any),
+    treated_50   = as.integer(first_treat_50  > 0L & year >= first_treat_50),
+    treated_100  = as.integer(first_treat_100 > 0L & year >= first_treat_100)
   )
 
 summary(panel_clean2)
@@ -451,26 +462,24 @@ summary(panel_clean2)
 ```{r}
 #filter for staggered did
 class(by_state$STATEFIP)
-class(panel_clean2$STATEFIP)
-
+str(panel_clean2)
 
 stag_did <- panel_clean2 %>%
-  left_join(by_state %>% select(STATEFIP, first_treat, group), by = "STATEFIP") %>%
-  filter(group %in% c("adopter","never")) %>%
+  filter(group_any %in% c("adopter","never")) %>%
   mutate(STATEFIPS = as.integer(STATEFIP)) 
 
-cohort_sizes <- stag_did %>%
-  distinct(STATEFIPS, first_treat) %>%
-  filter(first_treat != 0) %>%
-  count(first_treat, name = "n_states") %>%
-  arrange(first_treat)
+stag_did_fe <- stag_did
 
-valid_cohorts <- cohort_sizes %>% filter(n_states >= 4) %>% pull(first_treat)
+cohort_sizes <- stag_did %>%
+  distinct(STATEFIPS, first_treat_any) %>%
+  filter(first_treat_any != 0) %>%
+  count(first_treat_any, name = "n_states") %>%
+  arrange(first_treat_any)
+
+valid_cohorts <- cohort_sizes %>% filter(n_states >= 4) %>% pull(first_treat_any)
 
 stag_est <- stag_did %>%
-  filter(first_treat %in% valid_cohorts | first_treat == 0L)
-
-count(stag_est, first_treat, sort = TRUE)  # should show some 0s and some >0 cohorts
+  filter(first_treat_any %in% valid_cohorts | first_treat_any == 0L)
 
 ```
 
@@ -481,10 +490,6 @@ Going forward, the staggered DiD estimator requires adequate overlap and enough 
 
 ```{r}
 stag_est_win <- stag_est %>%
-  mutate(event_time = if_else(first_treat == 0L, NA_integer_, year - first_treat)) %>%
-  filter(is.na(event_time) | (event_time >= -4 & event_time <= 7))
-
-stag_est_win <- stag_est_win %>%
   mutate(z_med_income = scale(med_income)[,1],
          z_unemp = scale(annual_unemp_sa)[,1],
          z_snap = scale(share_foodstmp)[,1],
@@ -496,16 +501,53 @@ stag_est_win <- stag_est_win %>%
   drop_na(poverty_rate_pct, z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30, z_unemp)
 
 summary(stag_est_win)
+
+#do the same thing above for fixed effects dataset. Only different as I am excluding cohorts in the stag_est_win that are less than 3 observations.
+stag_did_fe <- stag_did_fe %>%
+  mutate(z_med_income = scale(med_income)[,1],
+         z_unemp = scale(annual_unemp_sa)[,1],
+         z_snap = scale(share_foodstmp)[,1],
+         z_share_lowedu = scale(share_lowedu)[,1],
+         z_share_nonwhite = scale(share_nonwhite)[,1],
+         z_share_under30 = scale(share_under30)[,1],
+         poverty_rate_pct = as.numeric(poverty_rate_pct)
+         ) %>%
+  drop_na(poverty_rate_pct, z_med_income, z_snap, z_share_lowedu, z_share_nonwhite, z_share_under30, z_unemp)
+  
 ```
 
 
 
 
 ```{r}
+#FE with covariates
+#came back to this after DiD results yielded little significance
+#I want to now know, are states with binding minimum wages and stronger safety nets systematically different in poverty outcomes?
+fe_model <- feols(
+  poverty_rate_pct ~ log_minw_real + z_share_lowedu + z_unemp + z_snap + z_share_nonwhite | STATEFIP + year,
+  data = stag_did_fe,
+  cluster = ~ STATEFIP,
+  weights = ~ pop_weight,
+)
+
+summary(fe_model)
+
+#polished results of fixed effects regression
+etable(fe_model, digits = 3, title = "Fixed Effects Model: Poverty vs. Minimum Wage with Covariates")
+```
+
+```{r}
+#define event window
+stag_est_win <- stag_est_win %>%
+  mutate(event_time = if_else(first_treat_any == 0L, NA_integer_, year - first_treat_any)) 
+```
+
+
+```{r}
 #Timing of First minimum wage increases above 7.25 by year
 by_state %>%
-  filter(!STATEFIP %in% first_treat, !is.na(first_treat)) %>%
-  ggplot(aes(x = as.factor(first_treat))) + 
+  filter(!STATEFIP %in% first_treat_any, !is.na(first_treat_any)) %>%
+  ggplot(aes(x = as.factor(first_treat_any))) + 
   geom_bar(fill = "blue") + 
   labs(
     title = "Timing of First Minimum Wage Increases Above $7.25",
@@ -524,7 +566,7 @@ att <- att_gt(
   yname = "poverty_rate_pct", 
   tname = "year", 
   idname = "STATEFIPS",
-  gname = "first_treat",
+  gname = "first_treat_any",
   data = stag_est, 
   panel = T, 
   control_group = "nevertreated",
@@ -538,42 +580,42 @@ agg_dyn <- aggte(att, type = "dynamic") #event-study
 summary(agg_overall)
 ```
 
-On average, states that raised the minimum wage experienced a 1.25 percentage-point lower poverty rate relative to the never-treated comparison group, after treatment. However, the confidence interval includes zero (p > 0.05), so this estimate is not statistically significant at conventional levels. Potentially weak results due to limited power of model with few cohorts. 
+
 
 ```{r}
 summary(agg_dyn)
 ```
 
-The table above shows effect by event time (years relative to adoption for states). Pre-treatment shows now systematic pattern (-4 to -1), but estimates fluctuate and CIs overlap zero, indicating no strong pre-trend bias that is apparent. At treatment (0 to +3), negative effects appear, suggesting poverty falls modestly after wage increases, though not precisely estimated. Effects fade, remain small, and statistically insignificant for long-run period (+4 to +12). The event-study pattern is consistent with a short-run reduction in poverty following minimum-wage increases but not large or persistent enough to reject the null with high confidence.
+
 
 
 ```{r}
 prepost_ok <- stag_est_win %>%
-  filter(first_treat != 0L) %>%
-  group_by(STATEFIPS, first_treat) %>%
+  filter(first_treat_any != 0L) %>%
+  group_by(STATEFIPS, first_treat_any) %>%
   summarise(
-    has_pre  = any(year <  first_treat),
-    has_post = any(year >= first_treat),
+    has_pre  = any(year <  first_treat_any),
+    has_post = any(year >= first_treat_any),
     .groups = "drop"
   ) %>%
   filter(has_pre & has_post) %>%
   pull(STATEFIPS)
 
 stag_est_win <- stag_est_win %>%
-  filter(first_treat == 0L | STATEFIPS %in% prepost_ok)
+  filter(first_treat_any == 0L | STATEFIPS %in% prepost_ok)
 
-stag_est_win %>% filter(first_treat != 0L) %>%
+stag_est_win %>% filter(first_treat_any != 0L) %>%
   summarise(any_pre = any(event_time < 0, na.rm = TRUE),
             any_post = any(event_time >= 0, na.rm = TRUE))
 summary(stag_est_win)
-table(stag_est_win$first_treat)
+table(stag_est_win$first_treat_any)
 ```
 
 
 ```{r}
 #number of states each year that increased
 stag_est_win %>%
-  group_by(first_treat) %>%
+  group_by(first_treat_any) %>%
   summarise(n_states = n_distinct(STATEFIPS), .groups = "drop")
 ```
 
@@ -591,7 +633,7 @@ att_cov_nyt <- att_gt(
   yname = "poverty_rate_pct",
   tname = "year",
   idname = "STATEFIPS",
-  gname = "first_treat",
+  gname = "first_treat_any",
   xformla = ~ z_share_lowedu + z_unemp + z_snap + z_share_nonwhite,
   data = stag_est_win,
   panel = F,
@@ -609,6 +651,61 @@ summary(agg_overall_cov)
 summary(agg_dynamic_cov)
 ```
  
+ 
+ 
+ 
+ 
+```{r}
+#I want to now know, are states with binding minimum wages and stronger safety nets systematically different in poverty outcomes?
+#expanding on the one from before, now looking at lags 
+stag_did_fe2 <- stag_did_fe %>%
+  group_by(STATEFIP) %>%
+  arrange(year) %>%
+  mutate(
+    minw_lag1 = lag(log_minw_real, 1),
+    minw_lag2 = lag(log_minw_real, 2)
+         ) %>%
+  ungroup()
+  
+fe_lag <- feols(
+  poverty_rate_pct ~ minw_lag1 + minw_lag2 + z_share_lowedu + z_unemp + z_snap + z_share_nonwhite | STATEFIP + year,
+  data = stag_did_fe2,
+  cluster = ~ STATEFIP,
+  weights = ~ pop_weight,
+)
+
+summary(fe_lag)
+etable(fe_lag)
+```
+
+
+
+```{r}
+#fixed effects including state-specific linear time trends
+fe_trend <- feols(
+  poverty_rate_pct ~ log_minw_real + z_unemp + z_share_lowedu + z_share_nonwhite + z_share_under30 + z_snap
+  | STATEFIPS + year + STATEFIPS[year],
+  data = stag_did_fe2,
+  weights = ~ pop_weight,
+  cluster = ~ STATEFIPS
+)
+etable(fe_model, fe_trend)
+
+```
+
+```{r}
+#fixed effects excluding covid years
+fe_nopand <- feols(
+  poverty_rate_pct ~ log_minw_real + z_unemp + z_share_lowedu + z_share_nonwhite + z_share_under30 + z_snap
+  | STATEFIPS + year,
+  data = stag_did_fe2 %>% filter(!(year %in% c(2020, 2021))),
+  weights = ~ pop_weight,
+  cluster = ~ STATEFIPS
+)
+etable(fe_model, fe_nopand)
+
+```
+
  
 ```{r}
 p_dyn <- ggdid(agg_dynamic_cov) +
@@ -631,7 +728,7 @@ att_cov_never <- att_gt(
   yname = "poverty_rate_pct",
   tname = "year",
   idname = "STATEFIPS",
-  gname = "first_treat",
+  gname = "first_treat_any",
   xformla = ~ z_share_lowedu + z_unemp + z_snap + z_share_nonwhite,
   data = stag_est_win,
   panel = F,
@@ -699,45 +796,31 @@ ggsave("fig2_poverty_vs_log_income.png", fig2, width = 6, height = 4.5, dpi = 30
 fig3 <- ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_rate_pct, color = Group)) +
   stat_summary(fun = "mean", geom = "line", size = 1.2) + 
   stat_summary(fun = "mean", geom = "point", size = 2.5) +
+  scale_color_manual(values = c(
+    "Control" = "gray50", 
+    "Treated" = "red1"
+  )) + 
   labs(
-    title = "Figure 3: Parallel Trends Check (Treated vs Control States)",
+    title = "Parallel Trends Check (Treated vs Control States)",
     subtitle = "Average poverty rates for full-time low-wage workers",
     x = "Year",
-    y = "Mean Poverty Rate (%)",
-    caption = "Notes: 'Treated' states raised their minimum wage above $7.25; 'Control' states never did."
-  ) +
+    y = "Mean Poverty Rate (%)") +
   custom_theme +
   theme(legend.position = "bottom")
-
-ggsave("fig3_parallel_trends.png", fig3, width = 6.5, height = 4.5, dpi = 300)
+print(fig3)
+ggsave("fig3_parallel_trends.png", fig3, width = 6.5, height = 4.5, dpi = 600)
 
 ```
 
 
-```{r}
-plot_data <- panel_clean2 %>%
-  group_by(STATEFIP) %>%
-  mutate(Group = ifelse(any(min_wage > 7.25), "Treated", "Control")) %>%
-  ungroup()
-
-
-ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_rate_pct, color = Group)) + 
-  stat_summary(fun = "mean", geom = "line", size = 1.2) + 
-  stat_summary(fun = "mean", geom = "point", size = 2.5) + 
-  labs(title = "Parallel Trends Check: Treated vs. Control States",
-       subtitle = "Average poverty rates before and after minimum wage increases",
-       x = "Year", y = "Mean Povery Rate", color = "Group") + 
-  theme_minimal()
-
-ggsave(filename = "parallel_trend_plot.png", dpi = 300)
-```
 
 
 
 ```{r}
+
 fig4 <- by_state %>%
-  filter(!STATEFIP %in% first_treat, !is.na(first_treat)) %>%
-  ggplot(aes(x = as.factor(first_treat))) +
+  filter(!STATEFIP %in% first_treat_any, !is.na(first_treat_any)) %>%
+  ggplot(aes(x = as.factor(first_treat_any))) +
   geom_bar(fill = "blue") +
   labs(
     title = "Figure 4: Timing of First Minimum Wage Increases",
@@ -752,24 +835,82 @@ ggsave("fig4_first_treat_histogram.png", fig4, width = 6, height = 4.5, dpi = 30
 
 
 ```{r}
+es_df <- data.frame(
+  egt   = agg_dynamic_cov$egt,
+  att   = agg_dynamic_cov$att.egt,
+  se    = agg_dynamic_cov$se.egt
+) %>%
+  mutate(
+    period = ifelse(egt < 0, "Pre", "Post"),
+    crit   = as.numeric(agg_dynamic_cov$crit.val.egt[1]),  
+    ci_low  = att - crit * se,
+    ci_high = att + crit * se
+  )
 #Figure 1: Event Study – Minimum Wage → Poverty
-p_dyn <- ggdid(agg_dyn) +
-  labs(
-    title    = "Figure 1: Event Study – Minimum Wage & Poverty",
-    subtitle = "Callaway & Sant’Anna staggered DID (no controls)",
-    x        = "Years since first increase",
-    y        = "ATT (percentage points)",
-    caption  = "Notes: Points show group-time ATT relative to first increase; vertical bars represent 95% CIs. \nPre-treatment periods in red; post-treatment in blue."
+p_es_noline <- ggplot(es_df, aes(x = egt, y = att)) +
+  # zero line
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "gray55",
+    linewidth = 0.7
   ) +
-  custom_theme
+  geom_linerange(
+    aes(ymin = ci_low, ymax = ci_high),
+    color = "gray50",
+    linewidth = 0.6
+  ) +
+  geom_point(
+    aes(color = period),
+    size = 2.6
+  ) +
+  scale_color_manual(values = c("Pre" = "green4", "Post" = "red3")) +
+  labs(
+    title    = "Event Study – Minimum Wage & Poverty",
+    x        = "Years since first increase",
+    y        = "Average Treatment Effect on the Treated"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position  = "none",
+    panel.grid.minor = element_blank(),
+    axis.title       = element_text(face = "bold"),
+    plot.title       = element_text(face = "bold")
+  )
+
+print(p_es_noline)
+ggsave("event_study_points_only_pre_green_post_red.png", p_es_noline,
+       width = 10, height = 6, dpi = 600)
+```
 
 
-ggsave("fig1_event_study.png", p_dyn, width = 7, height = 5, dpi = 300)
+```{r}
+p_es <- ggplot(es_df, aes(x = egt, y = att)) +
+  geom_hline(yintercept = 0, color = "gray55", linewidth = 0.8, linetype = "dashed") +
+  geom_linerange(aes(ymin = ci_low, ymax = ci_high), color = "gray50", linewidth = 0.7) +
+  geom_line(aes(color = period), linewidth = 1.1) +
+  geom_point(aes(color = period), size = 2.8) +
+  scale_color_manual(values = c("Pre" = "gray50", "Post" = "red3")) +
+  labs(
+    title    = "Event Study – Minimum Wage & Poverty",
+    x        = "Years since first increase",
+    y        = "Average Treatment Effect on the Treated"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold")
+  )
 
-print(p_dyn)
+print(p_es)
 
 
 ```
+
+
+
 
 ```{r}
 p_exp <- ggdid(agg_dynamic_cov) +
@@ -783,7 +924,7 @@ p_exp <- ggdid(agg_dynamic_cov) +
   custom_theme
 
 
-#save high-res
+# Save high-res
 ggsave("fig2_avg_effect_exposure.png", p_exp, width = 7, height = 5, dpi = 300)
 
 print(p_exp)
