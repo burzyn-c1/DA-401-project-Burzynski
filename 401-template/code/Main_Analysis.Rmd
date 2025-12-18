@@ -21,7 +21,7 @@ library(janitor)
 library(broom)
 library(data.table)
 library(did)
-
+library(flextable)
 
 #load in ipums (acs) dataset
 ipums <- fread("./../data/usa_00005.csv.gz") #used fread from the data.table package as the file is large and this allowed it to be loaded in much quicker
@@ -523,14 +523,14 @@ stag_did_fe <- stag_did_fe %>%
 #FE with covariates
 #came back to this after DiD results yielded little significance
 #I want to now know, are states with binding minimum wages and stronger safety nets systematically different in poverty outcomes?
-fe_model <- feols(
+fe_model_cov <- feols(
   poverty_rate_pct ~ log_minw_real + z_share_lowedu + z_unemp + z_snap + z_share_nonwhite | STATEFIP + year,
   data = stag_did_fe,
   cluster = ~ STATEFIPS,
   weights = ~ pop_weight,
 )
 
-summary(fe_model)
+summary(fe_model_cov)
 
 #polished results of fixed effects regression
 etable(fe_model, digits = 3, title = "Fixed Effects Model: Poverty vs. Minimum Wage with Covariates")
@@ -545,15 +545,17 @@ stag_est_win <- stag_est_win %>%
 
 ```{r}
 #Timing of First minimum wage increases above 7.25 by year
-by_state %>%
+timing_mw <- by_state %>%
   filter(!STATEFIP %in% first_treat_any, !is.na(first_treat_any)) %>%
   ggplot(aes(x = as.factor(first_treat_any))) + 
-  geom_bar(fill = "blue") + 
+  geom_bar(fill = "red1") + 
   labs(
     title = "Timing of First Minimum Wage Increases Above $7.25",
     x = "First Treatment Year", 
     y = "Number of States"
   ) + theme_minimal(base_size = 13)
+ggsave("timing_of_treatment.png", timing_mw, width = 6, height = 4.5, dpi = 300)
+
 ```
 
 
@@ -578,13 +580,12 @@ att <- att_gt(
 agg_overall <- aggte(att, type = "group") #overall att
 agg_dyn <- aggte(att, type = "dynamic") #event-study
 summary(agg_overall)
-```
-
-
-
-```{r}
 summary(agg_dyn)
 ```
+
+
+
+
 
 
 
@@ -713,7 +714,7 @@ p_dyn <- ggdid(agg_dynamic_cov) +
     title    = "Event Study: Minimum Wage and Poverty",
     subtitle = "Callaway & Sant’Anna staggered DID (with controls)",
     x = "Years since first increase",
-    y = "ATT (percentage points)"
+    y = "Average Treatment Effect on the Treated (% points)"
   ) +
   theme_minimal(base_size = 14)
 
@@ -793,6 +794,7 @@ ggsave("fig2_poverty_vs_log_income.png", fig2, width = 6, height = 4.5, dpi = 30
 ```
 
 ```{r}
+#this was made earlier originally, just polished down here
 fig3 <- ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_rate_pct, color = Group)) +
   stat_summary(fun = "mean", geom = "line", size = 1.2) + 
   stat_summary(fun = "mean", geom = "point", size = 2.5) +
@@ -801,6 +803,7 @@ fig3 <- ggplot(plot_data, aes(x = as.numeric(as.character(year)), y = poverty_ra
     "Treated" = "red1"
   )) + 
   labs(
+    title = "Parallel Trends Plot",
     x = "Year",
     y = "Mean Poverty Rate (%)") +
   custom_theme +
@@ -887,11 +890,9 @@ ggsave("event_study_points_only_pre_green_post_red.png", p_es_noline,
 ```{r}
 p_exp <- ggdid(agg_dynamic_cov) +
   labs(
-    title    = "Figure 2: Average Effect by Length of Exposure ",
-    subtitle = "Estimated change in poverty among full-time low-wage workers by years since \nfirst state minimum wage increase (with controls)",
-    x        = "Years since first minimum wage increase",
-    y        = "Estimated change in poverty rate (percentage points)",
-    caption  = "Each point shows how poverty among full time low wage workers changed in states that raised their minimum wage, compared with states \nthat never did. Values to the left of zero represent years before the first increase and remain close to zero, which suggests that \nstates followed similar trends before the policy took effect. Beginning at year zero, when the minimum wage increases, the \nestimates become progressively more negative, showing that poverty declines over time. By two to five years after the increase, \nstates display sizable reductions in poverty for full time low wage workers. Vertical bars represent 95 percent confidence intervals."
+    title    = "Average Effect by Length of Exposure on the Treatment Group",
+    x        = "Years Since First Minimum Wage Increase",
+    y        = "Estimated Change in Poverty Rate (Percentage Points)"
   ) +
   custom_theme
 
@@ -1020,5 +1021,175 @@ modelsummary::msummary(
   notes = "Population-weighted. Standard errors (in parentheses) clustered by state.", 
   output = "fe_table_poster.docx"
 )
+```
+
+```{r}
+#configuring tables and figures for paper that hasn't been done prior. 
+
+
+coef_labels <- c(
+  "log_minw_real"     = "Log real minimum wage",
+  "z_share_lowedu"    = "Share with less than high school (standardized)",
+  "z_unemp"           = "Unemployment rate (standardized)",
+  "z_snap"            = "Share receiving SNAP (standardized)",
+  "z_share_nonwhite"  = "Share nonwhite (standardized)"
+)
+fixest_to_flextable <- function(model, coef_labels, title = NULL, digits = 2) {
+  ct <- as.data.frame(coeftable(model))
+  ct$term <- rownames(ct)
+  rownames(ct) <- NULL
+
+  out <- ct %>%
+    transmute(
+      Term = recode(term, !!!coef_labels, .default = term),
+      Estimate = round(Estimate, digits),
+      `Std. error` = round(`Std. Error`, digits),
+      `p-value` = round(`Pr(>|t|)`, 3)
+    )
+
+  out <- out %>%
+    mutate(
+      Stars = case_when(
+        `p-value` < 0.01 ~ "***",
+        `p-value` < 0.05 ~ "**",
+        `p-value` < 0.10 ~ "*",
+        TRUE ~ ""
+      )
+    ) %>%
+    select(-`p-value`) %>%  
+    mutate(Estimate = paste0(Estimate, Stars)) %>%
+    select(-Stars)
+
+  ft <- flextable::flextable(out) %>%
+    flextable::autofit()
+
+  if (!is.null(title)) ft <- flextable::set_caption(ft, title)
+  ft
+}
+
+tab1_ft  <- fixest_to_flextable(fe_model_cov, coef_labels,
+                                title = "Table 1. Covariate-adjusted two-way fixed effects estimates")
+
+tabA1_ft <- fixest_to_flextable(fe_model, coef_labels,
+                                title = "Appendix Table A1. Baseline two-way fixed effects estimates")
+
+```
+
+
+
+```{r}
+aggte_to_df <- function(agg) {
+  overall <- data.frame(
+    Group  = "Overall ATT",
+    ATT    = agg$overall.att,
+    SE     = agg$overall.se,
+    CI_low = agg$overall.att - 1.96 * agg$overall.se,
+    CI_high= agg$overall.att + 1.96 * agg$overall.se
+  )
+
+  if (!is.null(agg$att.egt) && !is.null(agg$se.egt) && !is.null(agg$egt)) {
+    cohort <- data.frame(
+      Group  = paste0("First treated in ", agg$egt),
+      ATT    = agg$att.egt,
+      SE     = agg$se.egt,
+      CI_low = agg$att.egt - 1.96 * agg$se.egt,
+      CI_high= agg$att.egt + 1.96 * agg$se.egt
+    )
+    out <- bind_rows(overall, cohort)
+  } else {
+    out <- overall
+  }
+
+  out %>% mutate(across(c(ATT, SE, CI_low, CI_high), ~ round(.x, 2)))
+}
+
+```
+
+```{r}
+tab2_df  <- aggte_to_df(agg_overall_cov)
+tabA2_df <- aggte_to_df(agg_overall)
+
+names(tab2_df)  <- c("Group", "ATT (percentage points)", "Std. error", "95% CI (low)", "95% CI (high)")
+names(tabA2_df) <- c("Group", "ATT (percentage points)", "Std. error", "95% CI (low)", "95% CI (high)")
+
+tab2_ft <- flextable(tab2_df) %>%
+  set_caption("Table 2. Covariate-adjusted staggered DiD estimates (aggregated ATT)") %>%
+  autofit()
+
+tabA2_ft <- flextable(tabA2_df) %>%
+  set_caption("Appendix Table A2. Baseline staggered DiD estimates (aggregated ATT)") %>%
+  autofit()
+
+
+
+```
+
+
+
+```{r}
+vars_for_summary <- c(
+  "poverty_rate_pct",
+  "min_wage_real",
+  "log_minw_real",
+  "annual_unemp_sa",
+  "share_foodstmp",
+  "share_lowedu",
+  "share_nonwhite"
+)
+
+summary_df <- stag_did_fe2 %>%
+  select(any_of(vars_for_summary)) %>%
+  summarise(across(
+    everything(),
+    list(
+      Mean = ~ mean(.x, na.rm = TRUE),
+      SD   = ~ sd(.x, na.rm = TRUE),
+      Min  = ~ min(.x, na.rm = TRUE),
+      Max  = ~ max(.x, na.rm = TRUE),
+      N    = ~ sum(!is.na(.x))
+    ),
+    .names = "{.col}__{.fn}"
+  )) %>%
+  pivot_longer(everything(), names_to = c("Variable","Stat"), names_sep="__") |>
+  pivot_wider(names_from = Stat, values_from = value)
+
+var_labels <- c(
+  "poverty_rate_pct" = "Poverty rate among full-time low-wage workers (percent)",
+  "min_wage_real"    = "Real minimum wage",
+  "log_minw_real"    = "Log real minimum wage",
+  "annual_unemp_sa"  = "Unemployment rate (annual, percent)",
+  "share_foodstmp"   = "Share receiving SNAP",
+  "share_lowedu"     = "Share with less than high school",
+  "share_nonwhite"   = "Share nonwhite"
+)
+
+summary_df$Variable <- recode(summary_df$Variable, !!!var_labels)
+
+summary_df <- summary_df %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+tabA3_ft <- flextable::flextable(summary_df) %>%
+  flextable::autofit()
+tabA3_ft
+```
+
+```{r}
+#export to word
+library(officer)
+doc <- read_docx()
+
+doc <- doc %>%
+  body_add_flextable(tab1_ft) %>%
+  body_add_par("", style = "Normal") %>%
+  body_add_flextable(tab2_ft) %>%
+  body_add_par("", style = "Normal") %>%
+  body_add_flextable(tabA1_ft) %>%
+  body_add_par("", style = "Normal") %>%
+  body_add_flextable(tabA2_ft) %>%
+  body_add_par("", style = "Normal") %>%
+  body_add_flextable(tabA3_ft)
+
+print(doc, target = "tables_for_paper.docx")
+
 ```
 
